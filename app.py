@@ -61,6 +61,13 @@ def call_gemini_api(payload):
 def generate_quote_html(df, details, totals):
     """Generates the final quote HTML from the dataframe and details."""
     
+    # --- Dynamic Signature & Email ---
+    prepared_by_name = details.get('prepared_by', '')
+    prepared_by_position = details.get('position', '')
+    # Create a simple email from the name, e.g., "Harry L" -> "harry.l@mmem.com.au"
+    email_name = prepared_by_name.lower().replace(" ", ".")
+    dynamic_email = f"{email_name}@mmem.com.au"
+
     # Generate table rows from the dataframe
     rows_html = ""
     for index, row in df.iterrows():
@@ -103,7 +110,7 @@ def generate_quote_html(df, details, totals):
                      <div class="mt-2 text-sm text-gray-600">
                         <p><strong>P:</strong> 03 8846 2500</p>
                         <p><strong>F:</strong> 03 8846 2501</p>
-                        <p><strong>E:</strong> heath.judd@mmem.com.au</p>
+                        <p><strong>E:</strong> {dynamic_email}</p>
                     </div>
                 </div>
                 <div></div>
@@ -119,7 +126,7 @@ def generate_quote_html(df, details, totals):
                     <p><strong>PROJECT:</strong> {details['project_name']}</p>
                     <p><strong>QUOTE NO:</strong> {details['quote_number']}</p>
                     <p><strong>DATE:</strong> {details['date']}</p>
-                    <p><strong>PREPARED BY:</strong> {details['prepared_by']}</p>
+                    <p><strong>PREPARED BY:</strong> {prepared_by_name}</p>
                 </div>
             </section>
             <main>
@@ -137,7 +144,12 @@ def generate_quote_html(df, details, totals):
                     </tbody>
                 </table>
             </main>
-            <footer class="mt-8 flex justify-end">
+            <footer class="mt-8 pt-8 border-t flex justify-between items-end">
+                <div>
+                    <h3 class="font-bold text-gray-800">Kind Regards,</h3>
+                    <p class="mt-4 text-gray-700">{prepared_by_name}</p>
+                    <p class="text-sm text-gray-600">{prepared_by_position}</p>
+                </div>
                 <div class="w-1/2">
                     <div class="flex justify-between p-2 bg-gray-100 rounded-t-lg"><span class="font-bold">Sub-Total (Ex GST):</span><span>{format_currency(totals['total_ex_gst'])}</span></div>
                     <div class="flex justify-between p-2"><span class="font-bold">GST:</span><span>{format_currency(gst_total)}</span></div>
@@ -164,9 +176,57 @@ if "project_summary" not in st.session_state:
     st.session_state.project_summary = ""
 if "api_key" not in st.session_state:
     st.session_state.api_key = ""
+# Add state to hold the generated HTML and its details for download
+if "final_html" not in st.session_state:
+    st.session_state.final_html = None
+if "quote_details" not in st.session_state:
+    st.session_state.quote_details = {}
+
+
+# --- Custom Styling ---
+st.markdown("""
+<style>
+    /* Main app background */
+    .stApp {
+        background-color: #f0f2f6;
+    }
+    /* Gradient Title */
+    .gradient-text {
+        background: -webkit-linear-gradient(45deg, #0072ff, #00c6ff);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 700;
+        font-size: 2.5rem;
+        padding-bottom: 1rem;
+    }
+    /* Style headers */
+    h1, h2, h3 {
+        color: #2c3e50; /* A darker, more professional blue-gray */
+    }
+    /* Style buttons with hover effects */
+    .stButton>button {
+        border-radius: 8px;
+        border: 1px solid transparent;
+        transition: all 0.3s ease-in-out;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    .stButton>button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 8px rgba(0,0,0,0.15);
+    }
+    /* Style the file uploader */
+    .stFileUploader {
+        background-color: #ffffff;
+        border-radius: 0.5rem;
+        padding: 1.5rem;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+</style>
+""", unsafe_allow_html=True)
+
 
 # --- Main App UI ---
-st.title("📄 Quote Generator Pro")
+st.markdown('<p class="gradient-text">Quote Generator Pro</p>', unsafe_allow_html=True)
 st.write("Upload supplier quotes (PDF or TXT) to automatically extract line items, then edit and generate a final customer quote.")
 
 # --- Sidebar for Controls & API Key ---
@@ -267,6 +327,7 @@ if uploaded_files:
                 new_df['MARGIN'] = st.session_state.global_margin
                 new_df['ENHANCE'] = False
                 st.session_state.quote_items_df = pd.concat([st.session_state.quote_items_df, new_df], ignore_index=True)
+                st.session_state.final_html = None # Reset download state
                 st.success(f"Successfully extracted {len(all_new_items)} items!")
             
             if failed_files:
@@ -283,22 +344,6 @@ if not st.session_state.quote_items_df.empty:
     for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
         edited_df[col] = pd.to_numeric(edited_df[col], errors='coerce').fillna(0)
 
-    # --- Calculations ---
-    edited_df['LINE_COST'] = edited_df['QTY'] * edited_df['COST_PER_UNIT']
-    cost_after_disc = edited_df['COST_PER_UNIT'] * (1 - edited_df['DISC'] / 100)
-    edited_df['UNIT_SELL_EX_GST'] = cost_after_disc * (1 + edited_df['MARGIN'] / 100)
-    edited_df['TOTAL_SELL_EX_GST'] = edited_df['UNIT_SELL_EX_GST'] * edited_df['QTY']
-    gst_multiplier = 1 + st.session_state.gst_rate / 100
-    edited_df['TOTAL_SELL_INC_GST'] = edited_df['TOTAL_SELL_EX_GST'] * gst_multiplier
-
-    # --- Totals ---
-    totals = {
-        'total_ex_gst': edited_df['TOTAL_SELL_EX_GST'].sum(),
-        'total_inc_gst': edited_df['TOTAL_SELL_INC_GST'].sum()
-    }
-    
-    st.markdown("Use the table below to adjust quantities, costs, discounts, and margins. All financial columns will update automatically.")
-
     # --- Data Editor ---
     edited_df_from_editor = st.data_editor(
         edited_df,
@@ -308,7 +353,7 @@ if not st.session_state.quote_items_df.empty:
             "DISC": st.column_config.NumberColumn(label="Disc %"),
             "MARGIN": st.column_config.NumberColumn(label="Margin %"),
             "ENHANCE": st.column_config.CheckboxColumn(label="Enhance? ✨"),
-            # Calculated columns should not be editable
+            # Disable editing for calculated columns
             "LINE_COST": st.column_config.NumberColumn(label="Line Cost", format="$%.2f", disabled=True),
             "UNIT_SELL_EX_GST": st.column_config.NumberColumn(label="Unit Sell (ex GST)", format="$%.2f", disabled=True),
             "TOTAL_SELL_EX_GST": st.column_config.NumberColumn(label="Total Sell (ex GST)", format="$%.2f", disabled=True),
@@ -320,6 +365,7 @@ if not st.session_state.quote_items_df.empty:
 
     # Update session state with the edited dataframe from the editor
     st.session_state.quote_items_df = edited_df_from_editor
+    st.session_state.final_html = None # Reset download state if table is edited
 
     # --- Action Buttons ---
     col1, col2, col3 = st.columns(3)
@@ -340,6 +386,7 @@ if not st.session_state.quote_items_df.empty:
                         enhanced_count += 1
                 
                 st.session_state.quote_items_df = df
+                st.session_state.final_html = None # Reset download state
                 st.success(f"Successfully enhanced {enhanced_count} descriptions.")
                 st.rerun()
 
@@ -347,48 +394,50 @@ if not st.session_state.quote_items_df.empty:
         if st.button("🗑️ Clear All Items", type="secondary"):
             st.session_state.quote_items_df = pd.DataFrame(columns=st.session_state.quote_items_df.columns)
             st.session_state.project_summary = ""
+            st.session_state.final_html = None
             st.rerun()
 
     # --- Final Quote Section ---
     st.header("3. Generate Final Quote")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("📝 Generate Project Summary"):
-            if not st.session_state.quote_items_df.empty:
-                with st.spinner("Generating summary..."):
-                    items_for_prompt = "\n".join(
-                        f"- {row['QTY']}x {row['Description']} (from {row['Supplier']})"
-                        for _, row in st.session_state.quote_items_df.iterrows()
-                    )
-                    prompt = f"""Based on the following list of electrical components, write a 2-paragraph summary of this project's scope for a client proposal. Mention the key types of products being installed (e.g., emergency lighting, architectural downlights, weatherproof battens) and the primary suppliers involved.\n\nItems:\n{items_for_prompt}"""
-                    payload = {"contents": [{"parts": [{"text": prompt}]}]}
-                    summary = call_gemini_api(payload)
-                    if summary:
-                        st.session_state.project_summary = summary
-            else:
-                st.warning("Please add items to the quote first.")
+    # Generate Project Summary
+    if st.button("📝 Generate Project Summary"):
+        if not st.session_state.quote_items_df.empty:
+            with st.spinner("Generating summary..."):
+                items_for_prompt = "\n".join(
+                    f"- {row['QTY']}x {row['Description']} (from {row['Supplier']})"
+                    for _, row in st.session_state.quote_items_df.iterrows()
+                )
+                prompt = f"""Based on the following list of electrical components, write a 2-paragraph summary of this project's scope for a client proposal. Mention the key types of products being installed (e.g., emergency lighting, architectural downlights, weatherproof battens) and the primary suppliers involved.\n\nItems:\n{items_for_prompt}"""
+                payload = {"contents": [{"parts": [{"text": prompt}]}]}
+                summary = call_gemini_api(payload)
+                if summary:
+                    st.session_state.project_summary = summary
+        else:
+            st.warning("Please add items to the quote first.")
 
     if st.session_state.project_summary:
         st.subheader("Generated Project Summary")
         st.text_area("You can edit the summary below before finalizing the quote.", value=st.session_state.project_summary, height=200, key="summary_text_area")
 
+    # Final Quote Details Form
     with st.expander("Enter Final Quote Details", expanded=True):
         with st.form("quote_details_form"):
             c1, c2 = st.columns(2)
             with c1:
-                customer_name = st.text_input("Customer Name", value="Elon Electrics")
+                customer_name = st.text_input("Customer Name", value="")
                 attention = st.text_input("Attention")
-                project_name = st.text_input("Project Name", value="Nazareth College Student Hub")
+                project_name = st.text_input("Project Name", value="")
             with c2:
                 quote_number = st.text_input("Quote Number", value=f"Q{datetime.now().strftime('%Y%m%d%H%M')}")
-                prepared_by = st.text_input("Prepared By", value="Harry L")
+                prepared_by = st.text_input("Prepared By", value="")
+                position = st.text_input("Position (e.g., Sales)", value="")
                 date = st.date_input("Date", value=datetime.now())
 
-            submitted = st.form_submit_button("✓ Generate & Download Quote HTML", type="primary")
+            submitted = st.form_submit_button("✓ Prepare Quote for Download", type="primary")
             if submitted:
                 # Use the most up-to-date dataframe for the final HTML
-                final_df = st.session_state.quote_items_df
+                final_df = st.session_state.quote_items_df.copy()
                 
                 # Recalculate totals just before generating HTML to be safe
                 for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
@@ -404,18 +453,23 @@ if not st.session_state.quote_items_df.empty:
                     'total_inc_gst': final_df['TOTAL_SELL_INC_GST'].sum()
                 }
 
-                quote_details = {
+                st.session_state.quote_details = {
                     "customer_name": customer_name, "attention": attention,
                     "project_name": project_name, "quote_number": quote_number,
-                    "prepared_by": prepared_by, "date": date.strftime('%d/%m/%Y')
+                    "prepared_by": prepared_by, "position": position, "date": date.strftime('%d/%m/%Y')
                 }
                 
-                final_html = generate_quote_html(final_df, quote_details, final_totals)
+                st.session_state.final_html = generate_quote_html(final_df, st.session_state.quote_details, final_totals)
                 
-                st.download_button(
-                    label="📥 Download Quote File",
-                    data=final_html,
-                    file_name=f"Quote_{quote_details['quote_number']}_{quote_details['customer_name']}.html",
-                    mime="text/html"
-                )
-                st.success("Quote generated! Use the download button above.")
+                st.success("Quote prepared! The download button is now available below.")
+
+    # --- Display Download Button (OUTSIDE the form) ---
+    if st.session_state.final_html:
+        details = st.session_state.quote_details
+        file_name = f"Quote_{details.get('quote_number', 'Quote')}_{details.get('customer_name', 'Customer')}.html"
+        st.download_button(
+            label="📥 Download Quote File",
+            data=st.session_state.final_html,
+            file_name=file_name.replace(" ", "_"),
+            mime="text/html"
+        )
