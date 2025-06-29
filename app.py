@@ -273,22 +273,24 @@ if uploaded_files:
             for file in uploaded_files:
                 try:
                     bytes_data = file.getvalue()
-                    prompt = "From the provided document, extract all line items into a valid JSON array of objects. For each item, extract: TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. Ensure the entire output is a single, clean JSON array."
                     schema = { "type": "ARRAY", "items": { "type": "OBJECT", "properties": { "TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"}, "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}}}}
                     
                     if file.type == "application/pdf":
+                        # ** REVERTED LOGIC STARTS HERE **
+                        # Use the simpler, more direct text extraction method
                         doc = fitz.open(stream=bytes_data, filetype="pdf")
                         text = "".join(page.get_text() for page in doc)
-                        # Clean up text before sending
-                        clean_text = re.sub(r'\s{2,}', ' ', text).replace('"', "'")
-                        prompt = f"From this text, extract line items:\n\n{clean_text}"
+                        prompt = f"From the provided text extracted from a PDF, extract all line items. Document Text: \n\n{text}"
                         payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json", "responseSchema": schema}}
-                    else:
+                        # ** REVERTED LOGIC ENDS HERE **
+                    else: # Handle TXT files
                         b64 = base64.b64encode(bytes_data).decode('utf-8')
+                        prompt = "From the provided document, extract all line items. For each item, extract: TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. Return a JSON array of objects."
                         payload = {"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": file.type, "data": b64}}]}], "generationConfig": {"responseMimeType": "application/json", "responseSchema": schema}}
 
                     json_text = call_gemini_api(payload)
                     if json_text:
+                        # Use the robust parser to handle potentially messy API responses
                         parsed_data = clean_and_parse_json(json_text)
                         if parsed_data:
                             all_items.extend(parsed_data)
