@@ -5,6 +5,7 @@ import google.generativeai as genai
 import pandas as pd
 import json
 import base64
+import re # Added for robust JSON parsing
 from io import BytesIO
 from copy import deepcopy
 
@@ -192,15 +193,19 @@ with st.sidebar:
 
 # --- File Processing Logic ---
 if process_button and uploaded_files:
-    # This logic remains the same as the previous version
     with st.spinner(f"Processing {len(uploaded_files)} file(s) with Gemini... This may take a moment."):
         all_new_items = []
         failed_files = []
+        # --- START: Updated Extraction Prompt ---
         extraction_prompt = (
             "From the provided document, extract all line items. For each item, extract: "
             "TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. "
-            "Return a JSON array of objects. Ensure QTY and COST_PER_UNIT are numbers."
+            "Return ONLY a valid JSON array of objects. "
+            "Ensure QTY and COST_PER_UNIT are numbers. "
+            "**Crucially, all string values in the JSON must be properly formatted. Any special characters like newlines or double quotes within a string must be correctly escaped (e.g., '\\n' for newlines, '\\\"' for quotes).**"
         )
+        # --- END: Updated Extraction Prompt ---
+        
         json_schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"}, "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}}, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]}}
         model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
 
@@ -209,10 +214,38 @@ if process_button and uploaded_files:
                 st.write(f"Processing `{file.name}`...")
                 part = file_to_generative_part(file)
                 response = model.generate_content([extraction_prompt, part])
-                extracted_data = json.loads(response.text)
-                all_new_items.extend(extracted_data)
+                response_text = response.text
+                extracted_data = None
+
+                # --- START: Robust JSON Parsing ---
+                try:
+                    # First, try to parse the whole string as-is
+                    extracted_data = json.loads(response_text)
+                except json.JSONDecodeError as e:
+                    # If parsing fails, log the specific error and attempt to clean the response
+                    st.write(f"Initial JSON parse failed for `{file.name}`. Error: {e}. Attempting to clean response...")
+                    match = re.search(r'```json\s*(\{.*?\}|\[.*?\])\s*```|(\{.*?\}|\[.*?\])', response_text, re.DOTALL)
+                    if match:
+                        # Extract the captured JSON part
+                        json_str = match.group(1) if match.group(1) else match.group(2)
+                        try:
+                            extracted_data = json.loads(json_str)
+                            st.write(f"Successfully cleaned and parsed JSON for `{file.name}`.")
+                        except json.JSONDecodeError as final_e:
+                            st.error(f"Failed to parse cleaned JSON for `{file.name}`. Error: {final_e}")
+                            failed_files.append(file.name)
+                            continue 
+                    else:
+                        st.error(f"Error processing `{file.name}`: Could not find a valid JSON block in the API response.")
+                        failed_files.append(file.name)
+                        continue
+                # --- END: Robust JSON Parsing ---
+
+                if extracted_data:
+                    all_new_items.extend(extracted_data)
+                    
             except Exception as e:
-                st.error(f"Error processing `{file.name}`: {e}")
+                st.error(f"An unexpected error occurred processing `{file.name}`: {e}")
                 failed_files.append(file.name)
         
         if all_new_items:
