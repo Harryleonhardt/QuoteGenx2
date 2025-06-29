@@ -5,7 +5,7 @@ import google.generativeai as genai
 import pandas as pd
 import json
 import base64
-import re 
+import re
 import time # Import the time library for handling rate limits
 from io import BytesIO
 from copy import deepcopy
@@ -112,7 +112,7 @@ if "header_image_b64" not in st.session_state:
 if "company_logo_b64" not in st.session_state:
     st.session_state.company_logo_b64 = None
 
-# --- Password Protection ---
+# --- START: Password Protection ---
 def check_password():
     """Returns `True` if the user had a correct password."""
     if st.session_state.get("authenticated", False):
@@ -132,6 +132,7 @@ def check_password():
 
 if not check_password():
     st.stop()
+# --- END: Password Protection ---
 
 
 # --- Main Application UI ---
@@ -160,9 +161,11 @@ with st.sidebar:
 
     st.divider()
     
+    # --- START: Match to Customer Take-off UI ---
     st.subheader("2. Match to Customer Take-off (Optional)")
     takeoff_file = st.file_uploader("Upload Customer Take-off", type=['pdf', 'txt'])
     match_button = st.button("Match Quotes to Take-off", use_container_width=True, disabled=not takeoff_file or st.session_state.quote_items.empty)
+    # --- END: Match to Customer Take-off UI ---
 
     st.divider()
 
@@ -264,6 +267,7 @@ if process_button and supplier_files:
 
     # --- END: Rate Limiting and Batching Fix ---
 
+# --- START: Match to Customer Take-off Logic ---
 if match_button and takeoff_file:
     with st.spinner("🤖 Matching supplier quotes to customer take-off... This is a complex task and may take a moment."):
         try:
@@ -316,6 +320,7 @@ if match_button and takeoff_file:
 
         except Exception as e:
             st.error(f"Failed during matching process: {e}")
+# --- END: Match to Customer Take-off Logic ---
 
 
 # --- Main Content Area ---
@@ -330,6 +335,7 @@ else:
 
         st.subheader("Quote Line Items")
         
+        # --- START: Description Summarizer ---
         df_for_editing = st.session_state.quote_items.copy()
         options = [f"Row {i+1}: {row.get('Description', 'N/A')[:70]}..." for i, row in df_for_editing.iterrows()]
         rows_to_summarize = st.multiselect("Select descriptions to summarize:", options)
@@ -346,12 +352,14 @@ else:
                     st.session_state.quote_items.at[idx, 'Description'] = response.text.strip()
                 st.success("Descriptions summarized!")
                 st.rerun()
+        # --- END: Description Summarizer ---
 
         df = st.session_state.quote_items.copy()
         for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
             df[col] = pd.to_numeric(df.get(col), errors='coerce').fillna(0)
         cost_after_disc = df['COST_PER_UNIT'] * (1 - df['DISC'] / 100)
         df['SELL_UNIT_EX_GST'] = cost_after_disc * (1 + df['MARGIN'] / 100)
+        # --- START: Add Line Sell Column ---
         df['Line Sell (Ex. GST)'] = df['SELL_UNIT_EX_GST'] * df['QTY']
         
         edited_df = st.data_editor(df, column_config={
@@ -364,6 +372,7 @@ else:
         }, use_container_width=True, key="data_editor", hide_index=True)
 
         st.session_state.quote_items = edited_df.drop(columns=['Line Sell (Ex. GST)', 'SELL_UNIT_EX_GST'], errors='ignore')
+        # --- END: Add Line Sell Column ---
         
         st.divider()
         st.subheader("Quote Totals")
@@ -390,6 +399,7 @@ else:
         if submitted:
             items_html = ""
             for i, row in edited_df.iterrows():
+                # --- START: Amended HTML for merged Description/CAT_NO column ---
                 items_html += f"""
                 <tr class="border-b border-gray-200">
                     <td class="p-3 align-top">{i + 1}</td>
@@ -404,10 +414,12 @@ else:
                     <td class="p-3 text-right align-top">{format_currency(row['Line Sell (Ex. GST)'])}</td>
                 </tr>
                 """
+                # --- END: Amended HTML for merged Description/CAT_NO column ---
             
             company_logo_html = f'<img src="data:image/png;base64,{st.session_state.company_logo_b64}" alt="Company Logo" class="h-16 mb-4">' if st.session_state.company_logo_b64 else ''
             header_image_html = f'<img src="data:image/png;base64,{st.session_state.header_image_b64}" alt="Custom Header" class="max-h-24 object-contain">' if st.session_state.header_image_b64 else ''
 
+            # --- START: Amended HTML to adjust table header for new column layout ---
             quote_html = f"""
             <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Quote {q_details['quoteNumber']}</title>
             <script src="https://cdn.tailwindcss.com"></script><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -446,6 +458,7 @@ else:
                 </div>
             </div></body></html>
             """
+            # --- END: Amended HTML ---
             
             st.download_button(
                 label="✅ Download Final Quote",
@@ -454,4 +467,3 @@ else:
                 mime='text/html',
                 use_container_width=True
             )
-
