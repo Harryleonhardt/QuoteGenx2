@@ -107,6 +107,10 @@ if "project_summary" not in st.session_state:
 if "header_image_b64" not in st.session_state:
     st.session_state.header_image_b64 = None
 
+# START: New session state for company logo
+if "company_logo_b64" not in st.session_state:
+    st.session_state.company_logo_b64 = None
+# END: New session state for company logo
 
 # --- Main Application UI ---
 
@@ -160,10 +164,17 @@ with st.sidebar:
     st.divider()
     
     st.subheader("3. Quote Customization")
-    header_image = st.file_uploader("Upload Header Image", type=['png', 'jpg', 'jpeg'], help="Optional: Upload a banner image for the quote header.")
+    # START: Updated section for logo and header image
+    company_logo = st.file_uploader("Upload Company Logo", type=['png', 'jpg', 'jpeg'], help="Upload your main company logo. This will be embedded in the quote.")
+    if company_logo:
+        st.session_state.company_logo_b64 = image_to_base64(company_logo)
+        st.image(company_logo, caption="Company logo preview", width=200)
+
+    header_image = st.file_uploader("Upload Custom Header Image (Optional)", type=['png', 'jpg', 'jpeg'], help="Optional: Upload a banner image for the quote header.")
     if header_image:
         st.session_state.header_image_b64 = image_to_base64(header_image)
-        st.image(header_image, caption="Header image preview")
+        st.image(header_image, caption="Custom header preview")
+    # END: Updated section for logo and header image
 
 
     st.divider()
@@ -260,7 +271,7 @@ if process_button and uploaded_files:
 
 # --- Main Content Area ---
 if st.session_state.quote_items.empty:
-    st.info("Upload supplier quotes using the sidebar to get started.")
+    st.info("Upload your company logo and supplier quotes using the sidebar to get started.")
 else:
     # All content for the main area will be inside this container
     with st.container():
@@ -342,6 +353,14 @@ else:
                 </tr>
                 """
             
+            # START: Logic for embedded logo
+            company_logo_html = ""
+            if st.session_state.company_logo_b64:
+                company_logo_html = f'<img src="data:image/png;base64,{st.session_state.company_logo_b64}" alt="Company Logo" class="h-16 mb-4">'
+            else:
+                company_logo_html = '<h1 class="text-3xl font-bold text-gray-800">Company Name</h1>' # Fallback text
+            # END: Logic for embedded logo
+            
             header_image_html = ""
             if st.session_state.header_image_b64:
                 header_image_html = f'<img src="data:image/png;base64,{st.session_state.header_image_b64}" alt="Custom Header" class="max-h-24 object-contain">'
@@ -362,7 +381,7 @@ else:
                 <div class="max-w-4xl mx-auto bg-white p-6 sm:p-10 shadow-2xl rounded-xl">
                     <header class="flex justify-between items-start mb-8 border-b border-gray-300 pb-8">
                         <div>
-                            <img src="https://i.imgur.com/nwCXdLa.png" alt="AWM Logo" class="h-16 mb-4">
+                            {company_logo_html}
                             <h1 class="text-2xl font-bold text-gray-800">{st.session_state.user_details['branch']}</h1>
                             <p class="text-sm text-gray-600">A Division of Metal Manufactures Limited (A.B.N. 13 003 762 641)</p>
                         </div>
