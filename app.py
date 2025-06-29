@@ -6,6 +6,7 @@ import requests
 import json
 from datetime import datetime
 import base64
+import re
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -21,6 +22,38 @@ def format_currency(value):
     if pd.isna(value):
         return "$0.00"
     return f"${value:,.2f}"
+
+def clean_and_parse_json(json_string):
+    """
+    Attempts to clean and parse a potentially malformed JSON string from the API.
+    """
+    # Remove any markdown backticks and the word 'json'
+    cleaned_string = re.sub(r'```json\s*|\s*```', '', json_string.strip())
+
+    # Try to find the start of the JSON array '[' and the end ']'
+    try:
+        start_index = cleaned_string.find('[')
+        end_index = cleaned_string.rfind(']')
+        if start_index != -1 and end_index != -1:
+            # Extract the content between the first '[' and last ']'
+            potential_json = cleaned_string[start_index : end_index + 1]
+            return json.loads(potential_json)
+        else:
+            # Fallback for single object responses
+            start_index = cleaned_string.find('{')
+            end_index = cleaned_string.rfind('}')
+            if start_index != -1 and end_index != -1:
+                potential_json = cleaned_string[start_index : end_index + 1]
+                return json.loads(potential_json)
+    except json.JSONDecodeError as e:
+        st.error(f"Failed to parse cleaned JSON. Error: {e}")
+        st.text_area("Problematic API Response:", cleaned_string, height=200)
+        return None
+    
+    st.error("Could not find a valid JSON array or object in the API response.")
+    st.text_area("Raw API Response:", json_string, height=200)
+    return None
+
 
 def call_gemini_api(payload):
     """
@@ -240,13 +273,15 @@ if uploaded_files:
             for file in uploaded_files:
                 try:
                     bytes_data = file.getvalue()
-                    prompt = "From the provided document, extract all line items. For each item, extract: TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. Return a JSON array of objects."
+                    prompt = "From the provided document, extract all line items into a valid JSON array of objects. For each item, extract: TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. Ensure the entire output is a single, clean JSON array."
                     schema = { "type": "ARRAY", "items": { "type": "OBJECT", "properties": { "TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"}, "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}}}}
                     
                     if file.type == "application/pdf":
                         doc = fitz.open(stream=bytes_data, filetype="pdf")
                         text = "".join(page.get_text() for page in doc)
-                        prompt = f"From this text, extract line items:\n\n{text}"
+                        # Clean up text before sending
+                        clean_text = re.sub(r'\s{2,}', ' ', text).replace('"', "'")
+                        prompt = f"From this text, extract line items:\n\n{clean_text}"
                         payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json", "responseSchema": schema}}
                     else:
                         b64 = base64.b64encode(bytes_data).decode('utf-8')
@@ -254,7 +289,9 @@ if uploaded_files:
 
                     json_text = call_gemini_api(payload)
                     if json_text:
-                        all_items.extend(json.loads(json_text))
+                        parsed_data = clean_and_parse_json(json_text)
+                        if parsed_data:
+                            all_items.extend(parsed_data)
                 except Exception as e:
                     st.error(f"Error processing {file.name}: {e}")
             
@@ -272,7 +309,7 @@ if uploaded_files:
 if not st.session_state.quote_items_df.empty:
     st.header("2. Review and Edit Quote Items")
     
-    df = st.session_state.quote_items_df
+    df = st.session_state.quote_items_df.copy()
     # Ensure numeric types
     for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
         df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
@@ -291,7 +328,7 @@ if not st.session_state.quote_items_df.empty:
     b_col1, b_col2, b_col3 = st.columns(3)
     if b_col1.button("✍️ Enhance Descriptions"):
         with st.spinner("Enhancing..."):
-            df = st.session_state.quote_items_df
+            df = st.session_state.quote_items_df.copy()
             for i, row in df[df['ENHANCE']].iterrows():
                 prompt = f"Rewrite for a client proposal: \"{row['Description']}\""
                 text = call_gemini_api({"contents": [{"parts": [{"text": prompt}]}]})
@@ -332,6 +369,7 @@ if not st.session_state.quote_items_df.empty:
             if st.form_submit_button("✓ Prepare Quote for Download", type="primary"):
                 final_df = st.session_state.quote_items_df.copy()
                 # Recalculate totals
+                final_df['LINE_COST'] = final_df['QTY'] * final_df['COST_PER_UNIT']
                 cost_after_disc = final_df['COST_PER_UNIT'] * (1 - final_df['DISC'] / 100)
                 final_df['UNIT_SELL_EX_GST'] = cost_after_disc * (1 + final_df['MARGIN'] / 100)
                 final_df['TOTAL_SELL_EX_GST'] = final_df['UNIT_SELL_EX_GST'] * final_df['QTY']
@@ -354,4 +392,3 @@ if not st.session_state.quote_items_df.empty:
         details = st.session_state.quote_details
         file_name = f"Quote_{details.get('quote_number')}_{details.get('customer_name')}.html".replace(" ", "_")
         st.download_button("📥 Download Quote File", data=st.session_state.final_html, file_name=file_name, mime="text/html")
-
