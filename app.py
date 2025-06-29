@@ -35,7 +35,18 @@ st.markdown("""
     [data-testid="stSidebar"] {
         background-color: #0f172a; /* Slate 900 */
     }
-    /* Make titles more prominent */
+    /* --- START: Sidebar Text Color Change --- */
+    [data-testid="stSidebar"] p, 
+    [data-testid="stSidebar"] label, 
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3,
+    [data-testid="stSidebar"] h4,
+    [data-testid="stSidebar"] .st-emotion-cache-1g8sf0w { /* Targets expander header */
+        color: white !important;
+    }
+    /* --- END: Sidebar Text Color Change --- */
+
     h1, h2, h3 {
         color: #1e293b; /* Slate 800 */
     }
@@ -81,10 +92,12 @@ if "authenticated" not in st.session_state:
 if "quote_items" not in st.session_state:
     st.session_state.quote_items = pd.DataFrame()
 if "user_details" not in st.session_state:
+    # --- START: Leave name and email empty ---
     st.session_state.user_details = {
-        "name": "Harry Leonhardt", "job_title": "Sales", "branch": "AWM Nunawading",
-        "email": "harry.l@awm.mmem.com.au", "phone": "03 8846 2500"
+        "name": "", "job_title": "Sales", "branch": "AWM Nunawading",
+        "email": "", "phone": "03 8846 2500"
     }
+    # --- END: Leave name and email empty ---
 if "quote_details" not in st.session_state:
     st.session_state.quote_details = {
         "customerName": "", "attention": "", "projectName": "",
@@ -101,6 +114,9 @@ if "company_logo_b64" not in st.session_state:
 # --- Password Protection ---
 def check_password():
     """Returns `True` if the user had a correct password."""
+    if st.session_state.get("authenticated", False):
+        return True
+
     def password_entered():
         if st.session_state["password"] == "AWM374":
             st.session_state["authenticated"] = True
@@ -160,7 +176,7 @@ with st.sidebar:
          with st.spinner("🤖 Gemini is summarizing the project scope..."):
             items_for_prompt = "\n".join([f"- {row['QTY']}x {row['Description']} (from {row['Supplier']})" for _, row in st.session_state.quote_items.iterrows()])
             prompt = f"Based on the following list of electrical components, write a 2-paragraph summary of this project's scope for a client proposal. Mention the key types of products being installed and the primary suppliers involved.\n\nItems:\n{items_for_prompt}"
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-1.5-pro') # Using Pro for better summaries
             response = model.generate_content(prompt)
             st.session_state.project_summary = response.text
             st.toast("Project summary generated!", icon="✅")
@@ -202,11 +218,13 @@ def robust_json_parser(response_text):
 if process_button and supplier_files:
     with st.spinner(f"Processing {len(supplier_files)} supplier file(s)..."):
         all_new_items = []
-        extraction_prompt = ("From the provided document, extract all line items. For each item, extract: "
+        extraction_prompt = ("You are a data extraction specialist. From the provided document, extract all line items. Focus on tabular data. For each item, extract: "
                              "TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. "
                              "Return ONLY a valid JSON array of objects. Ensure QTY and COST_PER_UNIT are numbers. "
                              "**Crucially, all string values in the JSON must be properly formatted. Any special characters like newlines or double quotes within a string must be correctly escaped.**")
-        model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json"})
+        # --- START: Model Upgrade ---
+        model = genai.GenerativeModel('gemini-1.5-pro', generation_config={"response_mime_type": "application/json"})
+        # --- END: Model Upgrade ---
 
         for file in supplier_files:
             try:
@@ -227,7 +245,16 @@ if process_button and supplier_files:
 if match_button and takeoff_file:
     with st.spinner("🤖 Matching supplier quotes to customer take-off... This is a complex task and may take a moment."):
         try:
-            takeoff_content = takeoff_file.read().decode('utf-8')
+            # Use a more robust method to read file content
+            if takeoff_file.type == "application/pdf":
+                 # For PDF, we need Gemini to read it
+                takeoff_part = file_to_generative_part(takeoff_file)
+                text_extraction_model = genai.GenerativeModel('gemini-1.5-pro')
+                takeoff_response = text_extraction_model.generate_content(["Extract all text from this document.", takeoff_part])
+                takeoff_content = takeoff_response.text
+            else:
+                takeoff_content = takeoff_file.read().decode('utf-8')
+
             supplier_json_str = st.session_state.quote_items.to_json(orient='records')
             
             matching_prompt = f"""
@@ -254,13 +281,14 @@ if match_button and takeoff_file:
 
             Now, generate the final matched JSON array.
             """
-            model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json"})
+            # --- START: Model Upgrade ---
+            model = genai.GenerativeModel('gemini-1.5-pro', generation_config={"response_mime_type": "application/json"})
+            # --- END: Model Upgrade ---
             response = model.generate_content(matching_prompt)
             matched_data = robust_json_parser(response.text)
             
             if matched_data:
                 matched_df = pd.DataFrame(matched_data)
-                # Ensure all required columns exist, adding defaults if necessary
                 for col in ['DISC', 'MARGIN']:
                     if col not in matched_df.columns:
                         matched_df[col] = 0.0 if col == 'DISC' else global_margin
@@ -283,27 +311,26 @@ else:
 
         st.subheader("Quote Line Items")
         
-        # --- Description Summarizer ---
         df_for_editing = st.session_state.quote_items.copy()
-        options = [f"Row {i+1}: {row['Description'][:70]}..." for i, row in df_for_editing.iterrows()]
+        options = [f"Row {i+1}: {row.get('Description', 'N/A')[:70]}..." for i, row in df_for_editing.iterrows()]
         rows_to_summarize = st.multiselect("Select descriptions to summarize:", options)
         
         if st.button("✍️ Summarize Selected Descriptions", disabled=not rows_to_summarize):
             with st.spinner("🤖 Summarizing descriptions..."):
                 indices_to_update = [int(s.split(':')[0].replace('Row ', '')) - 1 for s in rows_to_summarize]
                 
-                summarize_model = genai.GenerativeModel('gemini-1.5-flash')
+                summarize_model = genai.GenerativeModel('gemini-1.5-pro')
                 for idx in indices_to_update:
                     original_desc = st.session_state.quote_items.at[idx, 'Description']
                     prompt = f"Summarize the following technical product description into a concise, client-friendly phrase (around 5-10 words). Do not add any preamble.\n\nOriginal: \"{original_desc}\""
                     response = summarize_model.generate_content(prompt)
                     st.session_state.quote_items.at[idx, 'Description'] = response.text.strip()
                 st.success("Descriptions summarized!")
+                st.rerun()
 
-        # --- Calculations and Data Editor ---
         df = st.session_state.quote_items.copy()
         for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            df[col] = pd.to_numeric(df.get(col), errors='coerce').fillna(0)
         cost_after_disc = df['COST_PER_UNIT'] * (1 - df['DISC'] / 100)
         df['SELL_UNIT_EX_GST'] = cost_after_disc * (1 + df['MARGIN'] / 100)
         df['Line Sell (Ex. GST)'] = df['SELL_UNIT_EX_GST'] * df['QTY']
@@ -315,9 +342,9 @@ else:
             "Description": st.column_config.TextColumn("Description", width="large"),
             "Line Sell (Ex. GST)": st.column_config.NumberColumn("Line Sell (Ex. GST)", format="$%.2f", disabled=True),
             "SELL_UNIT_EX_GST": st.column_config.NumberColumn(disabled=True)
-        }, use_container_width=True, key="data_editor")
+        }, use_container_width=True, key="data_editor", hide_index=True)
 
-        st.session_state.quote_items = edited_df.drop(columns=['Line Sell (Ex. GST)', 'SELL_UNIT_EX_GST'])
+        st.session_state.quote_items = edited_df.drop(columns=['Line Sell (Ex. GST)', 'SELL_UNIT_EX_GST'], errors='ignore')
         
         st.divider()
         st.subheader("Quote Totals")
@@ -347,12 +374,12 @@ else:
                 items_html += f"""
                 <tr class="border-b border-gray-200">
                     <td class="p-3 align-top">{i + 1}</td>
-                    <td class="p-3 align-top">{row['TYPE']}</td>
-                    <td class="p-3 align-top">{row['QTY']}</td>
-                    <td class="p-3 align-top">{row['Supplier']}</td>
+                    <td class="p-3 align-top">{row.get('TYPE', '')}</td>
+                    <td class="p-3 align-top">{row.get('QTY', 0)}</td>
+                    <td class="p-3 align-top">{row.get('Supplier', '')}</td>
                     <td class="p-3 align-top">
-                        <strong class="text-xs text-gray-700 block">{row['CAT_NO']}</strong>
-                        {row['Description']}
+                        <strong class="text-xs text-gray-700 block">{row.get('CAT_NO', '')}</strong>
+                        {row.get('Description', '')}
                     </td>
                     <td class="p-3 text-right align-top">{format_currency(row['SELL_UNIT_EX_GST'])}</td>
                     <td class="p-3 text-right align-top">{format_currency(row['Line Sell (Ex. GST)'])}</td>
@@ -408,4 +435,3 @@ else:
                 mime='text/html',
                 use_container_width=True
             )
-
