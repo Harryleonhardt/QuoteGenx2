@@ -6,6 +6,7 @@ import pandas as pd
 import json
 import base64
 import re 
+import time # Import the time library for handling rate limits
 from io import BytesIO
 from copy import deepcopy
 
@@ -83,7 +84,7 @@ try:
     GEMINI_API_AVAILABLE = True
 except (FileNotFoundError, KeyError):
     st.error("🚨 Gemini API Key not found. Please add it to your Streamlit secrets.", icon="🚨")
-    st.info("To get an API key, visit: https://makersuite.google.com/app/apikey")
+    st.info("To get an API key, visit: https://ai.google.dev/gemini-api/docs/rate-limits")
     GEMINI_API_AVAILABLE = False
     
 # --- Session State Initialization ---
@@ -216,38 +217,58 @@ def robust_json_parser(response_text):
             raise ValueError("Could not find a valid JSON block in the API response.")
 
 if process_button and supplier_files:
-    with st.spinner(f"Processing {len(supplier_files)} supplier file(s)..."):
+    # --- START: Rate Limiting and Batching Fix ---
+    with st.spinner(f"Processing {len(supplier_files)} supplier file(s) in batches..."):
         all_new_items = []
-        extraction_prompt = ("You are a data extraction specialist. From the provided document, extract all line items. Focus on tabular data. For each item, extract: "
-                             "TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. "
-                             "Return ONLY a valid JSON array of objects. Ensure QTY and COST_PER_UNIT are numbers. "
-                             "**Crucially, all string values in the JSON must be properly formatted. Any special characters like newlines or double quotes within a string must be correctly escaped.**")
-        # --- START: Model Upgrade ---
-        model = genai.GenerativeModel('gemini-1.5-pro', generation_config={"response_mime_type": "application/json"})
-        # --- END: Model Upgrade ---
-
-        for file in supplier_files:
-            try:
-                part = file_to_generative_part(file)
-                response = model.generate_content([extraction_prompt, part])
-                extracted_data = robust_json_parser(response.text)
-                if extracted_data: all_new_items.extend(extracted_data)
-            except Exception as e:
-                st.error(f"Error processing `{file.name}`: {e}")
         
+        # Combine all files into a single request for maximum efficiency
+        prompt_parts = [
+            ("You are a data extraction specialist. From the following documents, extract all line items. Consolidate them into a single list. "
+             "Focus on tabular data. For each item, extract: "
+             "TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. "
+             "Return ONLY a valid JSON array of objects. Ensure QTY and COST_PER_UNIT are numbers. "
+             "**Crucially, all string values in the JSON must be properly formatted. Any special characters like newlines or double quotes within a string must be correctly escaped.**")
+        ]
+        
+        for file in supplier_files:
+            prompt_parts.append(file_to_generative_part(file))
+
+        try:
+            st.write("Sending all files in one request to Gemini 1.5 Pro...")
+            model = genai.GenerativeModel('gemini-1.5-pro', generation_config={"response_mime_type": "application/json"})
+            response = model.generate_content(prompt_parts)
+            extracted_data = robust_json_parser(response.text)
+            if extracted_data: 
+                all_new_items.extend(extracted_data)
+        
+        except Exception as e:
+            # This handles API errors, including rate limits if they still occur.
+            st.error(f"An error occurred during processing: {e}")
+            st.info("This might be due to API rate limits. Please wait a minute and try again with fewer files.")
+
+        # This part remains the same
         if all_new_items:
             new_df = pd.DataFrame(all_new_items)
             new_df['DISC'] = 0.0
             new_df['MARGIN'] = global_margin
-            st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True).drop_duplicates(subset=['CAT_NO', 'Description'])
-            st.success(f"Successfully extracted {len(all_new_items)} items!")
+            
+            # Check for existing items before concatenating
+            if not st.session_state.quote_items.empty:
+                 st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
+            else:
+                 st.session_state.quote_items = new_df
+
+            st.session_state.quote_items.drop_duplicates(subset=['CAT_NO', 'Description'], inplace=True, keep='last')
+            st.success(f"Successfully processed {len(all_new_items)} items!")
+            st.rerun()
+
+    # --- END: Rate Limiting and Batching Fix ---
 
 if match_button and takeoff_file:
     with st.spinner("🤖 Matching supplier quotes to customer take-off... This is a complex task and may take a moment."):
         try:
             # Use a more robust method to read file content
             if takeoff_file.type == "application/pdf":
-                 # For PDF, we need Gemini to read it
                 takeoff_part = file_to_generative_part(takeoff_file)
                 text_extraction_model = genai.GenerativeModel('gemini-1.5-pro')
                 takeoff_response = text_extraction_model.generate_content(["Extract all text from this document.", takeoff_part])
@@ -281,9 +302,7 @@ if match_button and takeoff_file:
 
             Now, generate the final matched JSON array.
             """
-            # --- START: Model Upgrade ---
             model = genai.GenerativeModel('gemini-1.5-pro', generation_config={"response_mime_type": "application/json"})
-            # --- END: Model Upgrade ---
             response = model.generate_content(matching_prompt)
             matched_data = robust_json_parser(response.text)
             
@@ -435,3 +454,4 @@ else:
                 mime='text/html',
                 use_container_width=True
             )
+
