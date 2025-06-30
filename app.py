@@ -446,21 +446,22 @@ else:
         if submitted:
             items_html = ""
             for i, row in df.iterrows():
+                # --- MODIFIED: Reduced padding from p-3 to p-2 for better fit ---
                 product_details_html = f"""
-                <td class="p-3 w-1/3">
+                <td class="p-2 w-1/3">
                     <strong class="block text-xs font-bold">{row['CAT_NO']}</strong>
                     <span>{row['Description']}</span>
                 </td>
                 """
                 items_html += f"""
                 <tr class="border-b border-gray-200">
-                    <td class="p-3">{i + 1}</td>
-                    <td class="p-3">{row['TYPE']}</td>
-                    <td class="p-3">{row['QTY']}</td>
-                    <td class="p-3">{row['Supplier']}</td>
+                    <td class="p-2">{i + 1}</td>
+                    <td class="p-2">{row['TYPE']}</td>
+                    <td class="p-2">{row['QTY']}</td>
+                    <td class="p-2">{row['Supplier']}</td>
                     {product_details_html}
-                    <td class="p-3 text-right">{format_currency(row['SELL_UNIT_EX_GST'])}</td>
-                    <td class="p-3 text-right">{format_currency(row['SELL_TOTAL_EX_GST'])}</td>
+                    <td class="p-2 text-right">{format_currency(row['SELL_UNIT_EX_GST'])}</td>
+                    <td class="p-2 text-right">{format_currency(row['SELL_TOTAL_EX_GST'])}</td>
                 </tr>
                 """
 
@@ -474,7 +475,7 @@ else:
             if st.session_state.header_image_b64:
                 header_image_html = f'<img src="data:image/png;base64,{st.session_state.header_image_b64}" alt="Custom Header" class="max-h-24 object-contain">'
 
-            # --- MODIFIED: Replaced Tailwind JS with a direct CSS link for PDF rendering ---
+            # --- MODIFIED: Adjusted HTML structure and styling for better PDF output ---
             quote_html = f"""
             <!DOCTYPE html>
             <html lang="en">
@@ -484,11 +485,17 @@ else:
                 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
                 <style> 
                     body {{ font-family: 'Inter', sans-serif; }} 
-                    /* We can add other custom styles here if needed */
+                    /* --- NEW: CSS to help PDF renderer with table headers --- */
+                    thead {{ display: table-header-group; }}
+                    tr {{ page-break-inside: avoid; }}
+                    /* --- NEW: Reduced padding for PDF layout --- */
+                    .p-2 {{ padding: 0.5rem; }}
+                    .p-4 {{ padding: 1rem; }}
+                    .p-6 {{ padding: 1.5rem; }}
                 </style>
             </head>
-            <body class="bg-gray-100 p-4 sm:p-8">
-                <div class="max-w-5xl mx-auto bg-white p-6 sm:p-10 shadow-2xl rounded-xl">
+            <body>
+                <div class="bg-white p-6">
                     <header class="flex justify-between items-start mb-8 border-b border-gray-300 pb-8">
                         <div>
                             {company_logo_html}
@@ -500,7 +507,7 @@ else:
                             <h2 class="text-3xl font-bold text-gray-700 mt-4">QUOTATION</h2>
                         </div>
                     </header>
-                    <section class="grid grid-cols-1 sm:grid-cols-2 gap-6 mb-8">
+                    <section class="grid grid-cols-2 gap-6 mb-8">
                         <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
                             <h2 class="font-bold text-gray-800 mb-2">QUOTE TO:</h2>
                             <p class="text-gray-700">{q_details['customerName']}</p>
@@ -517,18 +524,18 @@ else:
                         <table class="w-full text-left text-sm">
                             <thead class="bg-slate-800 text-white">
                                 <tr>
-                                    <th class="p-3 rounded-tl-lg">ITEM</th><th class="p-3">TYPE</th><th class="p-3">QTY</th><th class="p-3">BRAND</th>
-                                    <th class="p-3 w-1/3">PRODUCT DETAILS</th>
-                                    <th class="p-3 text-right">UNIT EX GST</th><th class="p-3 text-right rounded-tr-lg">TOTAL EX GST</th>
+                                    <th class="p-2 rounded-tl-lg">ITEM</th><th class="p-2">TYPE</th><th class="p-2">QTY</th><th class="p-2">BRAND</th>
+                                    <th class="p-2 w-1/3">PRODUCT DETAILS</th>
+                                    <th class="p-2 text-right">UNIT EX GST</th><th class="p-2 text-right rounded-tr-lg">TOTAL EX GST</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-gray-200">{items_html}</tbody>
                         </table>
                     </main>
                     <footer class="mt-8 flex justify-end">
-                        <div class="w-full sm:w-1/2 lg:w-5/12">
-                            <div class="flex justify-between p-3 bg-gray-100 rounded-t-lg"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(df['SELL_TOTAL_EX_GST'].sum())}</span></div>
-                            <div class="flex justify-between p-3"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{format_currency(df['GST_AMOUNT'].sum())}</span></div>
+                        <div class="w-2/5">
+                            <div class="flex justify-between p-2 bg-gray-100 rounded-t-lg"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(df['SELL_TOTAL_EX_GST'].sum())}</span></div>
+                            <div class="flex justify-between p-2"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{format_currency(df['GST_AMOUNT'].sum())}</span></div>
                             <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{format_currency(df['SELL_TOTAL_INC_GST'].sum())}</span></div>
                         </div>
                     </footer>
@@ -549,10 +556,8 @@ else:
             </html>
             """
             
-            # --- MODIFIED: Create a CSS object from a CDN link for WeasyPrint ---
             tailwind_css = CSS(string='@import url("https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css");')
             
-            # Convert HTML to PDF using WeasyPrint, now with the full CSS stylesheet
             pdf_bytes = HTML(string=quote_html).write_pdf(stylesheets=[tailwind_css])
 
             st.download_button(
