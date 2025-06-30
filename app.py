@@ -7,7 +7,14 @@ import json
 import base64
 import re
 from io import BytesIO
-from pathlib import Path # Import Path for file handling
+from pathlib import Path
+# --- NEW: Import the WeasyPrint library ---
+try:
+    from weasyprint import HTML
+    WEASYPRINT_AVAILABLE = True
+except ImportError:
+    WEASYPRINT_AVAILABLE = False
+
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -46,7 +53,7 @@ st.markdown("""
     [data-testid="stSidebar"] .st-slider label {
         color: white !important;
     }
-    /* --- NEW: Direct styling for sidebar buttons for guaranteed visibility --- */
+    /* --- Direct styling for sidebar buttons for guaranteed visibility --- */
     [data-testid="stSidebar"] button {
         background-color: #0284c7 !important; /* A bright blue */
         color: white !important;
@@ -93,7 +100,6 @@ def get_logo_base64(file_path):
         with open(file_path, "rb") as img_file:
             return base64.b64encode(img_file.read()).decode()
     except FileNotFoundError:
-        # --- MODIFIED: More explicit error message ---
         st.error(
             f"Logo file not found. Please ensure 'AWM Logo (002).png' is in the root of your GitHub repository alongside 'app.py' and that you have rebooted the Streamlit app.",
             icon="🚨"
@@ -204,7 +210,6 @@ with st.sidebar:
     st.subheader("2. Global Settings")
     global_margin = st.number_input("Global Margin (%)", value=9.0, min_value=0.0, step=1.0, format="%.2f")
     
-    # --- MODIFIED: Removed type="primary" as CSS handles styling now ---
     if st.button("Apply Global Margin", use_container_width=True):
         if not st.session_state.quote_items.empty:
             st.session_state.quote_items['MARGIN'] = global_margin
@@ -319,6 +324,10 @@ if process_button and uploaded_files:
 
 
 # --- Main Content Area ---
+if not WEASYPRINT_AVAILABLE:
+     st.error("PDF generation library not found. Please ensure `weasyprint` is in your requirements.txt and the system packages are in `packages.txt`.", icon="🚨")
+     st.stop()
+
 if st.session_state.quote_items.empty:
     st.info("Upload your supplier quotes using the sidebar to get started. The company logo is pre-loaded.")
 else:
@@ -432,7 +441,7 @@ else:
             q_details['projectName'] = c1.text_input("Project Name", value=q_details['projectName'])
             q_details['quoteNumber'] = c2.text_input("Quote Number", value=q_details['quoteNumber'])
 
-            submitted = st.form_submit_button("Generate Final Quote HTML", type="primary", use_container_width=True)
+            submitted = st.form_submit_button("Generate Final Quote PDF", type="primary", use_container_width=True)
 
         if submitted:
             items_html = ""
@@ -538,12 +547,14 @@ else:
             </body>
             </html>
             """
+            
+            # --- MODIFIED: Convert HTML to PDF using WeasyPrint ---
+            pdf_bytes = HTML(string=quote_html).write_pdf()
 
             st.download_button(
-                label="✅ Download Final Quote",
-                data=quote_html.encode('utf-8'),
-                file_name=f"Quote_{q_details['quoteNumber']}_{q_details['customerName']}.html",
-                mime='text/html',
+                label="✅ Download Final Quote as PDF",
+                data=pdf_bytes,
+                file_name=f"Quote_{q_details['quoteNumber']}_{q_details['customerName']}.pdf",
+                mime='application/pdf',
                 use_container_width=True
             )
-
