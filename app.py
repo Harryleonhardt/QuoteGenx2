@@ -10,7 +10,7 @@ from io import BytesIO
 from pathlib import Path
 # --- NEW: Import the WeasyPrint library ---
 try:
-    from weasyprint import HTML
+    from weasyprint import HTML, CSS
     WEASYPRINT_AVAILABLE = True
 except ImportError:
     WEASYPRINT_AVAILABLE = False
@@ -474,17 +474,18 @@ else:
             if st.session_state.header_image_b64:
                 header_image_html = f'<img src="data:image/png;base64,{st.session_state.header_image_b64}" alt="Custom Header" class="max-h-24 object-contain">'
 
+            # --- MODIFIED: Replaced Tailwind JS with a direct CSS link for PDF rendering ---
             quote_html = f"""
             <!DOCTYPE html>
             <html lang="en">
             <head>
                 <meta charset="UTF-8">
                 <title>Quote {q_details['quoteNumber']}</title>
-                <script src="https://cdn.tailwindcss.com"></script>
-                <link rel="preconnect" href="https://fonts.googleapis.com">
-                <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
                 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
-                <style> body {{ font-family: 'Inter', sans-serif; }} </style>
+                <style> 
+                    body {{ font-family: 'Inter', sans-serif; }} 
+                    /* We can add other custom styles here if needed */
+                </style>
             </head>
             <body class="bg-gray-100 p-4 sm:p-8">
                 <div class="max-w-5xl mx-auto bg-white p-6 sm:p-10 shadow-2xl rounded-xl">
@@ -548,8 +549,11 @@ else:
             </html>
             """
             
-            # --- MODIFIED: Convert HTML to PDF using WeasyPrint ---
-            pdf_bytes = HTML(string=quote_html).write_pdf()
+            # --- MODIFIED: Create a CSS object from a CDN link for WeasyPrint ---
+            tailwind_css = CSS(string='@import url("https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css");')
+            
+            # Convert HTML to PDF using WeasyPrint, now with the full CSS stylesheet
+            pdf_bytes = HTML(string=quote_html).write_pdf(stylesheets=[tailwind_css])
 
             st.download_button(
                 label="✅ Download Final Quote as PDF",
