@@ -446,7 +446,6 @@ else:
         if submitted:
             items_html = ""
             for i, row in df.iterrows():
-                # --- MODIFIED: Reduced padding from p-3 to p-2 for better fit ---
                 product_details_html = f"""
                 <td class="p-2 w-1/3">
                     <strong class="block text-xs font-bold">{row['CAT_NO']}</strong>
@@ -455,13 +454,13 @@ else:
                 """
                 items_html += f"""
                 <tr class="border-b border-gray-200">
-                    <td class="p-2">{i + 1}</td>
-                    <td class="p-2">{row['TYPE']}</td>
-                    <td class="p-2">{row['QTY']}</td>
-                    <td class="p-2">{row['Supplier']}</td>
+                    <td class="p-2 align-top">{i + 1}</td>
+                    <td class="p-2 align-top">{row['TYPE']}</td>
+                    <td class="p-2 align-top">{row['QTY']}</td>
+                    <td class="p-2 align-top">{row['Supplier']}</td>
                     {product_details_html}
-                    <td class="p-2 text-right">{format_currency(row['SELL_UNIT_EX_GST'])}</td>
-                    <td class="p-2 text-right">{format_currency(row['SELL_TOTAL_EX_GST'])}</td>
+                    <td class="p-2 text-right align-top">{format_currency(row['SELL_UNIT_EX_GST'])}</td>
+                    <td class="p-2 text-right align-top">{format_currency(row['SELL_TOTAL_EX_GST'])}</td>
                 </tr>
                 """
 
@@ -475,7 +474,7 @@ else:
             if st.session_state.header_image_b64:
                 header_image_html = f'<img src="data:image/png;base64,{st.session_state.header_image_b64}" alt="Custom Header" class="max-h-24 object-contain">'
 
-            # --- MODIFIED: Adjusted HTML structure and styling for better PDF output ---
+            # --- MODIFIED: Added comprehensive print and layout styles ---
             quote_html = f"""
             <!DOCTYPE html>
             <html lang="en">
@@ -484,18 +483,75 @@ else:
                 <title>Quote {q_details['quoteNumber']}</title>
                 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
                 <style> 
-                    body {{ font-family: 'Inter', sans-serif; }} 
-                    /* --- NEW: CSS to help PDF renderer with table headers --- */
-                    thead {{ display: table-header-group; }}
-                    tr {{ page-break-inside: avoid; }}
-                    /* --- NEW: Reduced padding for PDF layout --- */
-                    .p-2 {{ padding: 0.5rem; }}
+                    @page {{
+                        size: A4;
+                        margin: 1.5cm; /* Set even margins for the page */
+                    }}
+                    body {{ 
+                        font-family: 'Inter', sans-serif;
+                    }}
+                    thead {{ 
+                        display: table-header-group; /* Ensures header repeats on each page */
+                    }}
+                    tfoot {{
+                        display: table-footer-group;
+                    }}
+                    tr {{ 
+                        page-break-inside: avoid; /* Prevents rows from splitting across pages */
+                    }}
+                    .p-2 {{ padding: 0.3rem; }} /* Slightly reduced padding for a better fit */
                     .p-4 {{ padding: 1rem; }}
                     .p-6 {{ padding: 1.5rem; }}
+                    .w-full {{ width: 100%; }}
+                    .w-1/3 {{ width: 33.33%; }}
+                    .w-2/5 {{ width: 40%; }}
+                    .text-right {{ text-align: right; }}
+                    .text-left {{ text-align: left; }}
+                    .text-xs {{ font-size: 0.75rem; }}
+                    .text-sm {{ font-size: 0.875rem; }}
+                    .text-lg {{ font-size: 1.125rem; }}
+                    .text-2xl {{ font-size: 1.5rem; }}
+                    .text-3xl {{ font-size: 1.875rem; }}
+                    .font-bold {{ font-weight: 700; }}
+                    .bg-white {{ background-color: #ffffff; }}
+                    .bg-gray-50 {{ background-color: #f9fafb; }}
+                    .bg-gray-100 {{ background-color: #f3f4f6; }}
+                    .bg-slate-800 {{ background-color: #1e293b; }}
+                    .text-white {{ color: #ffffff; }}
+                    .text-gray-600 {{ color: #4b5563; }}
+                    .text-gray-700 {{ color: #374151; }}
+                    .text-gray-800 {{ color: #1f2937; }}
+                    .border {{ border-width: 1px; }}
+                    .border-b {{ border-bottom-width: 1px; }}
+                    .border-t-2 {{ border-top-width: 2px; }}
+                    .border-dashed {{ border-style: dashed; }}
+                    .border-gray-200 {{ border-color: #e5e7eb; }}
+                    .border-gray-300 {{ border-color: #d1d5db; }}
+                    .rounded-lg {{ border-radius: 0.5rem; }}
+                    .rounded-t-lg {{ border-top-left-radius: 0.5rem; border-top-right-radius: 0.5rem; }}
+                    .rounded-b-lg {{ border-bottom-left-radius: 0.5rem; border-bottom-right-radius: 0.5rem; }}
+                    .rounded-tl-lg {{ border-top-left-radius: 0.5rem; }}
+                    .rounded-tr-lg {{ border-top-right-radius: 0.5rem; }}
+                    .flex {{ display: flex; }}
+                    .justify-between {{ justify-content: space-between; }}
+                    .justify-end {{ justify-content: flex-end; }}
+                    .items-start {{ align-items: flex-start; }}
+                    .grid {{ display: grid; }}
+                    .grid-cols-2 {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+                    .gap-6 {{ gap: 1.5rem; }}
+                    .mb-8 {{ margin-bottom: 2rem; }}
+                    .mt-12 {{ margin-top: 3rem; }}
+                    .mt-8 {{ margin-top: 2rem; }}
+                    .mt-4 {{ margin-top: 1rem; }}
+                    .mt-2 {{ margin-top: 0.5rem; }}
+                    .pb-8 {{ padding-bottom: 2rem; }}
+                    .pt-8 {{ padding-top: 2rem; }}
+                    .block {{ display: block; }}
+                    .align-top {{ vertical-align: top; }}
                 </style>
             </head>
             <body>
-                <div class="bg-white p-6">
+                <div class="bg-white">
                     <header class="flex justify-between items-start mb-8 border-b border-gray-300 pb-8">
                         <div>
                             {company_logo_html}
@@ -521,7 +577,7 @@ else:
                     </section>
                     {f'<section class="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-lg"><h3 class="font-bold text-lg mb-2 text-blue-900">Project Summary</h3><p class="text-gray-700 whitespace-pre-wrap">{st.session_state.project_summary}</p></section>' if st.session_state.project_summary else ''}
                     <main>
-                        <table class="w-full text-left text-sm">
+                        <table class="w-full text-left text-sm" style="table-layout: auto;">
                             <thead class="bg-slate-800 text-white">
                                 <tr>
                                     <th class="p-2 rounded-tl-lg">ITEM</th><th class="p-2">TYPE</th><th class="p-2">QTY</th><th class="p-2">BRAND</th>
@@ -532,14 +588,14 @@ else:
                             <tbody class="divide-y divide-gray-200">{items_html}</tbody>
                         </table>
                     </main>
-                    <footer class="mt-8 flex justify-end">
+                    <footer class="mt-8 flex justify-end" style="page-break-inside: avoid;">
                         <div class="w-2/5">
                             <div class="flex justify-between p-2 bg-gray-100 rounded-t-lg"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(df['SELL_TOTAL_EX_GST'].sum())}</span></div>
                             <div class="flex justify-between p-2"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{format_currency(df['GST_AMOUNT'].sum())}</span></div>
                             <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{format_currency(df['SELL_TOTAL_INC_GST'].sum())}</span></div>
                         </div>
                     </footer>
-                    <div class="mt-12 pt-8 border-t-2 border-dashed border-gray-300">
+                    <div class="mt-12 pt-8 border-t-2 border-dashed border-gray-300" style="page-break-inside: avoid;">
                         <h3 class="font-bold text-gray-800">Prepared For You By:</h3>
                         <p class="text-gray-700 mt-2">{st.session_state.user_details['name']}</p>
                         <p class="text-gray-600 text-sm">{st.session_state.user_details['job_title']}</p>
@@ -547,7 +603,7 @@ else:
                         <p class="mt-2 text-sm"><strong>Email:</strong> {st.session_state.user_details['email']}</p>
                         <p class="text-sm"><strong>Phone:</strong> {st.session_state.user_details['phone']}</p>
                     </div>
-                    <div class="mt-12 text-xs text-gray-500 border-t border-gray-300 pt-4">
+                    <div class="mt-12 text-xs text-gray-500 border-t border-gray-300 pt-4" style="page-break-inside: avoid;">
                         <h3 class="font-bold mb-2">CONDITIONS:</h3>
                         <p>This offer is valid for 30 days. All goods are sold under MMEM's Terms and Conditions of Sale. Any changes in applicable taxes (GST) or tariffs which may occur will be to your account.</p>
                     </div>
@@ -556,9 +612,34 @@ else:
             </html>
             """
             
-            tailwind_css = CSS(string='@import url("https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css");')
-            
-            pdf_bytes = HTML(string=quote_html).write_pdf(stylesheets=[tailwind_css])
+            # Use a basic CSS string instead of fetching from a URL for reliability
+            # This string contains the core Tailwind utility classes needed for the layout.
+            # It's less comprehensive than the full library but more stable for PDF generation.
+            css_string = """
+                .p-2 { padding: 0.3rem; } .p-4 { padding: 1rem; } .p-6 { padding: 1.5rem; } .pb-8 { padding-bottom: 2rem; } .pt-8 { padding-top: 2rem; }
+                .mb-8 { margin-bottom: 2rem; } .mt-12 { margin-top: 3rem; } .mt-8 { margin-top: 2rem; } .mt-4 { margin-top: 1rem; } .mt-2 { margin-top: 0.5rem; }
+                .w-full { width: 100%; } .w-1/3 { width: 33.3333%; } .w-2/5 { width: 40%; }
+                .h-16 { height: 4rem; } .max-h-24 { max-height: 6rem; }
+                .text-right { text-align: right; } .text-left { text-align: left; }
+                .text-xs { font-size: 0.75rem; } .text-sm { font-size: 0.875rem; } .text-lg { font-size: 1.125rem; } .text-2xl { font-size: 1.5rem; } .text-3xl { font-size: 1.875rem; }
+                .font-bold { font-weight: 700; }
+                .bg-white { background-color: #ffffff; } .bg-gray-50 { background-color: #f9fafb; } .bg-gray-100 { background-color: #f3f4f6; } .bg-slate-800 { background-color: #1e293b; } .bg-blue-50 { background-color: #eff6ff; }
+                .text-white { color: #ffffff; } .text-gray-600 { color: #4b5563; } .text-gray-700 { color: #374151; } .text-gray-800 { color: #1f2937; } .text-blue-900 { color: #1e3a8a; }
+                .border { border-width: 1px; } .border-b { border-bottom-width: 1px; } .border-t-2 { border-top-width: 2px; } .border-dashed { border-style: dashed; }
+                .border-gray-200 { border-color: #e5e7eb; } .border-gray-300 { border-color: #d1d5db; } .border-blue-200 { border-color: #bfdbfe; }
+                .rounded-lg { border-radius: 0.5rem; } .rounded-t-lg { border-top-left-radius: 0.5rem; border-top-right-radius: 0.5rem; } .rounded-b-lg { border-bottom-left-radius: 0.5rem; border-bottom-right-radius: 0.5rem; } .rounded-tl-lg { border-top-left-radius: 0.5rem; } .rounded-tr-lg { border-top-right-radius: 0.5rem; }
+                .flex { display: flex; } .grid { display: grid; }
+                .justify-between { justify-content: space-between; } .justify-end { justify-content: flex-end; }
+                .items-start { align-items: flex-start; }
+                .grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                .gap-6 { gap: 1.5rem; }
+                .divide-y > :not([hidden]) ~ :not([hidden]) { border-top-width: 1px; border-color: #e5e7eb; }
+                .whitespace-pre-wrap { white-space: pre-wrap; }
+                .object-contain { object-fit: contain; }
+                .block { display: block; } .align-top { vertical-align: top; }
+            """
+
+            pdf_bytes = HTML(string=quote_html).write_pdf(stylesheets=[CSS(string=css_string)])
 
             st.download_button(
                 label="✅ Download Final Quote as PDF",
