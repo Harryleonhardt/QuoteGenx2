@@ -46,6 +46,22 @@ st.markdown("""
     [data-testid="stSidebar"] .st-slider label {
         color: white !important;
     }
+    /* --- NEW: Direct styling for sidebar buttons for guaranteed visibility --- */
+    [data-testid="stSidebar"] button {
+        background-color: #0284c7 !important; /* A bright blue */
+        color: white !important;
+        border: 1px solid #0284c7 !important;
+    }
+    [data-testid="stSidebar"] button:hover {
+        background-color: #0369a1 !important; /* A darker blue for hover */
+        border-color: #0369a1 !important;
+        color: white !important;
+    }
+    [data-testid="stSidebar"] button:disabled {
+        background-color: #334155 !important;
+        color: #94a3b8 !important;
+        border-color: #334155 !important;
+    }
     /* Make titles more prominent */
     h1, h2, h3 {
         color: #1e293b; /* Slate 800 */
@@ -77,7 +93,11 @@ def get_logo_base64(file_path):
         with open(file_path, "rb") as img_file:
             return base64.b64encode(img_file.read()).decode()
     except FileNotFoundError:
-        st.warning(f"Logo file not found at {file_path}. Please ensure it is in the same directory as the app script and the repository is updated.")
+        # --- MODIFIED: More explicit error message ---
+        st.error(
+            f"Logo file not found. Please ensure 'AWM Logo (002).png' is in the root of your GitHub repository alongside 'app.py' and that you have rebooted the Streamlit app.",
+            icon="🚨"
+        )
         return None
 
 def format_currency(num):
@@ -149,7 +169,6 @@ if "header_image_b64" not in st.session_state:
     st.session_state.header_image_b64 = None
 
 if "company_logo_b64" not in st.session_state:
-    # --- MODIFIED: Updated logo filename ---
     logo_file_path = Path(__file__).parent / "AWM Logo (002).png"
     st.session_state.company_logo_b64 = get_logo_base64(logo_file_path)
 
@@ -178,14 +197,15 @@ with st.sidebar:
         help="Upload one or more supplier quote documents. The system will extract line items."
     )
 
-    process_button = st.button("Process Uploaded Files", type="primary", use_container_width=True, disabled=not uploaded_files)
+    process_button = st.button("Process Uploaded Files", use_container_width=True, disabled=not uploaded_files)
 
     st.divider()
 
     st.subheader("2. Global Settings")
     global_margin = st.number_input("Global Margin (%)", value=9.0, min_value=0.0, step=1.0, format="%.2f")
-    # --- MODIFIED: Added type="primary" for visibility ---
-    if st.button("Apply Global Margin", type="primary", use_container_width=True):
+    
+    # --- MODIFIED: Removed type="primary" as CSS handles styling now ---
+    if st.button("Apply Global Margin", use_container_width=True):
         if not st.session_state.quote_items.empty:
             st.session_state.quote_items['MARGIN'] = global_margin
             st.toast(f"Applied {global_margin}% margin to all items.")
@@ -193,8 +213,7 @@ with st.sidebar:
         else:
             st.warning("No items in the quote to apply margin to.")
     
-    # --- MODIFIED: Added type="primary" for visibility ---
-    if st.button("Clear All Quote Items", type="primary", use_container_width=True):
+    if st.button("Clear All Quote Items", use_container_width=True):
         st.session_state.quote_items = pd.DataFrame(columns=[
             "TYPE", "QTY", "Supplier", "CAT_NO", "Description",
             "COST_PER_UNIT", "DISC", "MARGIN"
