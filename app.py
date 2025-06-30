@@ -214,7 +214,6 @@ def robust_json_parser(response_text):
         else:
             raise ValueError("Could not find a valid JSON block in the API response.")
 
-# --- START: Reverted to one-by-one file processing to avoid rate limit issues ---
 if process_button and supplier_files:
     with st.spinner(f"Processing {len(supplier_files)} supplier file(s) one-by-one. This may take a moment..."):
         all_new_items = []
@@ -232,7 +231,6 @@ if process_button and supplier_files:
                     file_to_generative_part(file)
                 ]
                 
-                # Using a model that handles PDF/text extraction well
                 model = genai.GenerativeModel('gemini-1.5-pro', generation_config={"response_mime_type": "application/json"})
                 response = model.generate_content(prompt_parts)
                 
@@ -240,13 +238,12 @@ if process_button and supplier_files:
                 if extracted_data:
                     all_new_items.extend(extracted_data)
                 
-                # A 2-second delay between requests to stay within free-tier API rate limits
                 time.sleep(2)
 
             except Exception as e:
                 st.error(f"An error occurred while processing `{file.name}`: {e}")
                 st.info("This might be due to API rate limits. The process will continue with the next file after a short delay.")
-                time.sleep(5) # Longer sleep after an error before continuing
+                time.sleep(5)
 
         progress_bar.progress(1.0, text="Processing complete!")
 
@@ -263,14 +260,14 @@ if process_button and supplier_files:
             st.session_state.quote_items.drop_duplicates(subset=['CAT_NO', 'Description'], inplace=True, keep='last')
             st.success(f"Successfully processed {len(all_new_items)} items from {len(supplier_files)} file(s)!")
             st.rerun()
-# --- END: Reverted file processing logic ---
 
-
+# --- START: Customer Take-off Logic (Amended to use Gemini 1.5 Flash) ---
 if match_button and takeoff_file:
     with st.spinner("🤖 Matching supplier quotes to customer take-off... This is a complex task and may take a moment."):
         try:
             if takeoff_file.type == "application/pdf":
                 takeoff_part = file_to_generative_part(takeoff_file)
+                # Text extraction can still use the powerful model
                 text_extraction_model = genai.GenerativeModel('gemini-1.5-pro')
                 takeoff_response = text_extraction_model.generate_content(["Extract all text from this document.", takeoff_part])
                 takeoff_content = takeoff_response.text
@@ -303,7 +300,9 @@ if match_button and takeoff_file:
 
             Now, generate the final matched JSON array.
             """
-            model = genai.GenerativeModel('gemini-1.5-pro', generation_config={"response_mime_type": "application/json"})
+            st.info("Using Gemini 1.5 Flash for matching, which is optimized for speed and larger requests.")
+            # Use Gemini 1.5 Flash - it's faster and has more generous rate limits for this type of task.
+            model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json"})
             response = model.generate_content(matching_prompt)
             matched_data = robust_json_parser(response.text)
             
@@ -317,6 +316,7 @@ if match_button and takeoff_file:
 
         except Exception as e:
             st.error(f"Failed during matching process: {e}")
+# --- END: Customer Take-off Logic ---
 
 
 # --- Main Content Area ---
@@ -339,13 +339,13 @@ else:
             with st.spinner("🤖 Summarizing descriptions..."):
                 indices_to_update = [int(s.split(':')[0].replace('Row ', '')) - 1 for s in rows_to_summarize]
                 
-                summarize_model = genai.GenerativeModel('gemini-1.5-pro')
+                summarize_model = genai.GenerativeModel('gemini-1.5-flash') # Flash is fine for this too
                 for idx in indices_to_update:
                     original_desc = st.session_state.quote_items.at[idx, 'Description']
                     prompt = f"Summarize the following technical product description into a concise, client-friendly phrase (around 5-10 words). Do not add any preamble.\n\nOriginal: \"{original_desc}\""
                     response = summarize_model.generate_content(prompt)
                     st.session_state.quote_items.at[idx, 'Description'] = response.text.strip()
-                    time.sleep(1) # Small delay between summarization requests
+                    time.sleep(1) 
                 st.success("Descriptions summarized!")
                 st.rerun()
 
