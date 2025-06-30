@@ -37,6 +37,7 @@ st.markdown("""
         background-color: #0f172a; /* Slate 900 */
     }
     /* --- START: Sidebar Text Color Change --- */
+    /* This makes all text, labels, and headers in the sidebar white for better contrast */
     [data-testid="stSidebar"] p, 
     [data-testid="stSidebar"] label, 
     [data-testid="stSidebar"] h1,
@@ -93,10 +94,12 @@ if "authenticated" not in st.session_state:
 if "quote_items" not in st.session_state:
     st.session_state.quote_items = pd.DataFrame()
 if "user_details" not in st.session_state:
+    # --- START: Leave name and email empty as requested ---
     st.session_state.user_details = {
         "name": "", "job_title": "Sales", "branch": "AWM Nunawading",
         "email": "", "phone": "03 8846 2500"
     }
+    # --- END: Leave name and email empty ---
 if "quote_details" not in st.session_state:
     st.session_state.quote_details = {
         "customerName": "", "attention": "", "projectName": "",
@@ -110,26 +113,36 @@ if "header_image_b64" not in st.session_state:
 if "company_logo_b64" not in st.session_state:
     st.session_state.company_logo_b64 = None
 
-# --- Password Protection ---
+# --- START: Password Protection ---
 def check_password():
     """Returns `True` if the user had a correct password."""
+    # If the user is already authenticated, just return True.
     if st.session_state.get("authenticated", False):
         return True
 
+    # This callback function is triggered when the password input changes.
     def password_entered():
+        # Check if the entered password is correct.
         if st.session_state["password"] == "AWM374":
             st.session_state["authenticated"] = True
-            del st.session_state["password"]  
+            del st.session_state["password"]  # Don't store password.
         else:
             st.session_state["authenticated"] = False
 
+    # Show the password input field.
     st.text_input("Password", type="password", on_change=password_entered, key="password")
+
+    # Display an error message if authentication failed.
     if "authenticated" in st.session_state and not st.session_state.authenticated:
         st.error("😕 Password incorrect")
+    
+    # Return the current authentication status.
     return st.session_state.get("authenticated", False)
 
+# This stops the app from running further if the password is not correct.
 if not check_password():
     st.stop()
+# --- END: Password Protection ---
 
 
 # --- Main Application UI ---
@@ -172,10 +185,10 @@ with st.sidebar:
             st.toast(f"Applied {global_margin}% margin to all items.")
     
     if st.button("✨ Generate Project Summary", use_container_width=True, disabled=st.session_state.quote_items.empty):
-         with st.spinner("🤖 Gemini is summarizing the project scope..."):
+        with st.spinner("🤖 Gemini is summarizing the project scope..."):
             items_for_prompt = "\n".join([f"- {row['QTY']}x {row['Description']} (from {row['Supplier']})" for _, row in st.session_state.quote_items.iterrows()])
             prompt = f"Based on the following list of electrical components, write a 2-paragraph summary of this project's scope for a client proposal. Mention the key types of products being installed and the primary suppliers involved.\n\nItems:\n{items_for_prompt}"
-            model = genai.GenerativeModel('gemini-1.5-pro')
+            model = genai.GenerativeModel('gemini-1.5-pro') # Using Pro for better summaries
             response = model.generate_content(prompt)
             st.session_state.project_summary = response.text
             st.toast("Project summary generated!", icon="✅")
@@ -201,73 +214,79 @@ with st.sidebar:
 
 # --- Main File Processing Logic ---
 def robust_json_parser(response_text):
+    """Parses JSON from a string, attempting to clean it first."""
     try:
+        # First, try to parse the text directly.
         return json.loads(response_text)
     except json.JSONDecodeError:
+        # If that fails, search for a JSON block marked with ```json ... ``` or just {...} or [...]
         match = re.search(r'```json\s*(\{.*?\}|\[.*?\])\s*```|(\{.*?\}|\[.*?\])', response_text, re.DOTALL)
         if match:
+            # Extract the JSON string from the matched groups
             json_str = match.group(1) if match.group(1) else match.group(2)
             try:
+                # Try parsing the extracted string.
                 return json.loads(json_str)
             except json.JSONDecodeError as e:
+                # If it still fails, raise an error with the cleaned string for debugging.
                 raise ValueError(f"Failed to parse cleaned JSON: {e}")
         else:
+            # If no JSON block is found, raise an error.
             raise ValueError("Could not find a valid JSON block in the API response.")
 
+
 if process_button and supplier_files:
-    with st.spinner(f"Processing {len(supplier_files)} supplier file(s) one-by-one. This may take a moment..."):
+    with st.spinner(f"Processing {len(supplier_files)} supplier file(s)... This may take a moment."):
         all_new_items = []
-        progress_bar = st.progress(0, text="Initializing...")
         
-        for i, file in enumerate(supplier_files):
-            progress_bar.progress((i) / len(supplier_files), text=f"Processing file: {file.name}")
-            try:
-                prompt_parts = [
-                    ("You are a data extraction specialist. From the following document, extract all line items. "
-                     "Focus on tabular data. For each item, extract: "
-                     "TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. "
-                     "Return ONLY a valid JSON array of objects. Ensure QTY and COST_PER_UNIT are numbers. "
-                     "**Crucially, all string values in the JSON must be properly formatted. Any special characters like newlines or double quotes within a string must be correctly escaped."),
-                    file_to_generative_part(file)
-                ]
-                
-                model = genai.GenerativeModel('gemini-1.5-pro', generation_config={"response_mime_type": "application/json"})
-                response = model.generate_content(prompt_parts)
-                
-                extracted_data = robust_json_parser(response.text)
-                if extracted_data:
-                    all_new_items.extend(extracted_data)
-                
-                time.sleep(2)
+        # We can combine all files into a single prompt for Gemini 1.5 Pro's large context window
+        prompt_parts = [
+            ("You are a data extraction specialist. From the following documents, extract all line items. Consolidate them into a single list. "
+             "Focus on tabular data. For each item, extract: "
+             "TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. "
+             "Return ONLY a valid JSON array of objects. Ensure QTY and COST_PER_UNIT are numbers. "
+             "**Crucially, all string values in the JSON must be properly formatted. Any special characters like newlines or double quotes within a string must be correctly escaped.**")
+        ]
+        
+        for file in supplier_files:
+            prompt_parts.append(file_to_generative_part(file))
 
-            except Exception as e:
-                st.error(f"An error occurred while processing `{file.name}`: {e}")
-                st.info("This might be due to API rate limits. The process will continue with the next file after a short delay.")
-                time.sleep(5)
-
-        progress_bar.progress(1.0, text="Processing complete!")
+        try:
+            st.write("Sending all files in one request to Gemini 1.5 Pro...")
+            # Use Gemini 1.5 Pro with JSON response type for reliability
+            model = genai.GenerativeModel('gemini-1.5-pro', generation_config={"response_mime_type": "application/json"})
+            response = model.generate_content(prompt_parts)
+            extracted_data = robust_json_parser(response.text)
+            if extracted_data: 
+                all_new_items.extend(extracted_data)
+        
+        except Exception as e:
+            st.error(f"An error occurred during processing: {e}")
+            st.info("This might be due to API rate limits or an issue with the file content. Please wait a minute and try again.")
 
         if all_new_items:
             new_df = pd.DataFrame(all_new_items)
             new_df['DISC'] = 0.0
             new_df['MARGIN'] = global_margin
             
+            # Check for existing items before concatenating
             if not st.session_state.quote_items.empty:
-                 st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
+                st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
             else:
-                 st.session_state.quote_items = new_df
+                st.session_state.quote_items = new_df
 
+            # Remove duplicates based on catalog number and description
             st.session_state.quote_items.drop_duplicates(subset=['CAT_NO', 'Description'], inplace=True, keep='last')
-            st.success(f"Successfully processed {len(all_new_items)} items from {len(supplier_files)} file(s)!")
+            st.success(f"Successfully processed {len(all_new_items)} items!")
             st.rerun()
 
-# --- START: Customer Take-off Logic (Amended to use Gemini 1.5 Flash) ---
+
 if match_button and takeoff_file:
     with st.spinner("🤖 Matching supplier quotes to customer take-off... This is a complex task and may take a moment."):
         try:
+            # Use a more robust method to read file content
             if takeoff_file.type == "application/pdf":
                 takeoff_part = file_to_generative_part(takeoff_file)
-                # Text extraction can still use the powerful model
                 text_extraction_model = genai.GenerativeModel('gemini-1.5-pro')
                 takeoff_response = text_extraction_model.generate_content(["Extract all text from this document.", takeoff_part])
                 takeoff_content = takeoff_response.text
@@ -300,14 +319,13 @@ if match_button and takeoff_file:
 
             Now, generate the final matched JSON array.
             """
-            st.info("Using Gemini 1.5 Flash for matching, which is optimized for speed and larger requests.")
-            # Use Gemini 1.5 Flash - it's faster and has more generous rate limits for this type of task.
-            model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json"})
+            model = genai.GenerativeModel('gemini-1.5-pro', generation_config={"response_mime_type": "application/json"})
             response = model.generate_content(matching_prompt)
             matched_data = robust_json_parser(response.text)
             
             if matched_data:
                 matched_df = pd.DataFrame(matched_data)
+                # Ensure new DF has the required columns, fill with defaults if not
                 for col in ['DISC', 'MARGIN']:
                     if col not in matched_df.columns:
                         matched_df[col] = 0.0 if col == 'DISC' else global_margin
@@ -316,7 +334,6 @@ if match_button and takeoff_file:
 
         except Exception as e:
             st.error(f"Failed during matching process: {e}")
-# --- END: Customer Take-off Logic ---
 
 
 # --- Main Content Area ---
@@ -331,41 +348,59 @@ else:
 
         st.subheader("Quote Line Items")
         
+        # --- START: Description Summarizer Feature ---
+        # Create a copy for safe operations
         df_for_editing = st.session_state.quote_items.copy()
+
+        # Create human-readable options for the multiselect widget
         options = [f"Row {i+1}: {row.get('Description', 'N/A')[:70]}..." for i, row in df_for_editing.iterrows()]
         rows_to_summarize = st.multiselect("Select descriptions to summarize:", options)
         
         if st.button("✍️ Summarize Selected Descriptions", disabled=not rows_to_summarize):
             with st.spinner("🤖 Summarizing descriptions..."):
+                # Get the integer indices of the selected rows
                 indices_to_update = [int(s.split(':')[0].replace('Row ', '')) - 1 for s in rows_to_summarize]
                 
-                summarize_model = genai.GenerativeModel('gemini-1.5-flash') # Flash is fine for this too
+                summarize_model = genai.GenerativeModel('gemini-1.5-pro')
                 for idx in indices_to_update:
                     original_desc = st.session_state.quote_items.at[idx, 'Description']
+                    # Prompt designed for concise, client-friendly summaries
                     prompt = f"Summarize the following technical product description into a concise, client-friendly phrase (around 5-10 words). Do not add any preamble.\n\nOriginal: \"{original_desc}\""
                     response = summarize_model.generate_content(prompt)
+                    # Update the dataframe in session state directly
                     st.session_state.quote_items.at[idx, 'Description'] = response.text.strip()
-                    time.sleep(1) 
                 st.success("Descriptions summarized!")
-                st.rerun()
+                st.rerun() # Rerun to show the updated descriptions in the table
+        # --- END: Description Summarizer Feature ---
 
+        # --- START: Table Calculations ---
+        # Work with a copy of the dataframe
         df = st.session_state.quote_items.copy()
+
+        # Ensure numeric types for calculation columns to prevent errors
         for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
             df[col] = pd.to_numeric(df.get(col), errors='coerce').fillna(0)
+
+        # Calculate sell prices and line totals
         cost_after_disc = df['COST_PER_UNIT'] * (1 - df['DISC'] / 100)
         df['SELL_UNIT_EX_GST'] = cost_after_disc * (1 + df['MARGIN'] / 100)
         df['Line Sell (Ex. GST)'] = df['SELL_UNIT_EX_GST'] * df['QTY']
         
+        # Display the data editor with the new calculated columns
         edited_df = st.data_editor(df, column_config={
             "COST_PER_UNIT": st.column_config.NumberColumn("Cost/Unit", format="$%.2f"),
             "DISC": st.column_config.NumberColumn("Disc %", format="%.1f%%"),
             "MARGIN": st.column_config.NumberColumn("Margin %", format="%.1f%%"),
             "Description": st.column_config.TextColumn("Description", width="large"),
+            # New "Line Sell" column is displayed but disabled from editing
             "Line Sell (Ex. GST)": st.column_config.NumberColumn("Line Sell (Ex. GST)", format="$%.2f", disabled=True),
+            # Hide the sell unit price column as it's an intermediate calculation
             "SELL_UNIT_EX_GST": st.column_config.NumberColumn(disabled=True)
         }, use_container_width=True, key="data_editor", hide_index=True)
 
+        # Update session state with edits, dropping the temporary calculated columns
         st.session_state.quote_items = edited_df.drop(columns=['Line Sell (Ex. GST)', 'SELL_UNIT_EX_GST'], errors='ignore')
+        # --- END: Table Calculations ---
         
         st.divider()
         st.subheader("Quote Totals")
@@ -392,6 +427,8 @@ else:
         if submitted:
             items_html = ""
             for i, row in edited_df.iterrows():
+                # --- START: HTML Item Row Formatting Change ---
+                # This combines CAT_NO and Description into a single cell with new styling
                 items_html += f"""
                 <tr class="border-b border-gray-200">
                     <td class="p-3 align-top">{i + 1}</td>
@@ -406,6 +443,7 @@ else:
                     <td class="p-3 text-right align-top">{format_currency(row['Line Sell (Ex. GST)'])}</td>
                 </tr>
                 """
+                # --- END: HTML Item Row Formatting Change ---
             
             company_logo_html = f'<img src="data:image/png;base64,{st.session_state.company_logo_b64}" alt="Company Logo" class="h-16 mb-4">' if st.session_state.company_logo_b64 else ''
             header_image_html = f'<img src="data:image/png;base64,{st.session_state.header_image_b64}" alt="Custom Header" class="max-h-24 object-contain">' if st.session_state.header_image_b64 else ''
