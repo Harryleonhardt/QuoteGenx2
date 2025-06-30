@@ -115,7 +115,6 @@ if "quote_items" not in st.session_state:
     ])
 
 if "user_details" not in st.session_state:
-    # --- MODIFIED: Name and email are now empty by default ---
     st.session_state.user_details = {
         "name": "",
         "job_title": "Sales",
@@ -301,15 +300,16 @@ else:
         st.caption("You can edit values directly in the table below. Calculations will update automatically.")
         
         # --- START: Modified Data Editor Section ---
-        # Create a copy for editing that includes the calculated column
         df_for_editing = st.session_state.quote_items.copy()
         
         # Ensure numeric types for calculation
-        for col in ['QTY', 'COST_PER_UNIT']:
+        for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
             df_for_editing[col] = pd.to_numeric(df_for_editing[col], errors='coerce').fillna(0)
             
-        # Add the calculated Line Cost column
-        df_for_editing['LINE_COST'] = df_for_editing['QTY'] * df_for_editing['COST_PER_UNIT']
+        # Add the new calculated columns for display
+        cost_after_disc = df_for_editing['COST_PER_UNIT'] * (1 - df_for_editing['DISC'] / 100)
+        df_for_editing['SELL_UNIT_EX_GST'] = cost_after_disc * (1 + df_for_editing['MARGIN'] / 100)
+        df_for_editing['SELL_TOTAL_EX_GST'] = df_for_editing['SELL_UNIT_EX_GST'] * df_for_editing['QTY']
         
         edited_df = st.data_editor(
             df_for_editing,
@@ -318,29 +318,41 @@ else:
                 "DISC": st.column_config.NumberColumn("Disc %", format="%.1f%%"),
                 "MARGIN": st.column_config.NumberColumn("Margin %", format="%.1f%%"),
                 "Description": st.column_config.TextColumn("Description", width="large"),
-                "LINE_COST": st.column_config.NumberColumn("Line Cost (Pre-Disc)", format="$%.2f", disabled=True, help="= QTY * Cost/Unit"), # New calculated column
+                # --- NEW: Config for calculated customer-facing prices ---
+                "SELL_UNIT_EX_GST": st.column_config.NumberColumn(
+                    "Unit Price Ex GST",
+                    help="The selling price per unit after discount and margin.",
+                    format="$%.2f",
+                    disabled=True
+                ),
+                "SELL_TOTAL_EX_GST": st.column_config.NumberColumn(
+                    "Line Price Ex GST",
+                    help="The total selling price for the line (= Unit Price Ex GST * QTY).",
+                    format="$%.2f",
+                    disabled=True
+                ),
             },
             column_order=[
                 "TYPE", "QTY", "Supplier", "CAT_NO", "Description",
-                "COST_PER_UNIT", "LINE_COST", "DISC", "MARGIN" # New column order
+                "COST_PER_UNIT", "DISC", "MARGIN", 
+                "SELL_UNIT_EX_GST", "SELL_TOTAL_EX_GST" # New column order
             ],
             num_rows="dynamic",
             use_container_width=True,
             key="data_editor"
         )
-        # Save changes back to session state, dropping the temporary calculated column
+        
+        # Save changes back to session state, dropping the temporary calculated columns
         if not edited_df.equals(df_for_editing):
-             st.session_state.quote_items = edited_df.drop(columns=['LINE_COST'])
+             st.session_state.quote_items = edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST'])
              st.rerun()
-
         # --- END: Modified Data Editor Section ---
 
-        # --- NEW: AI Description Summarizer ---
+        # --- AI Description Summarizer ---
         st.divider()
         st.subheader("✍️ AI Description Summarizer")
         st.caption("Select an item to generate a shorter, more client-friendly description.")
         
-        # Create a list of options for the selectbox
         item_options = [f"Row {i+1}: {row['Description'][:70]}..." for i, row in st.session_state.quote_items.iterrows()]
         
         col1, col2 = st.columns([3, 1])
@@ -349,7 +361,6 @@ else:
         summarize_button = col2.button("Summarize Description", use_container_width=True, disabled=not selected_item_str)
         
         if summarize_button and selected_item_str:
-            # Find the index of the selected item
             selected_index = item_options.index(selected_item_str)
             original_description = st.session_state.quote_items.at[selected_index, 'Description']
             
@@ -359,10 +370,9 @@ else:
                     model = genai.GenerativeModel('gemini-1.5-flash')
                     response = model.generate_content(prompt)
                     
-                    # Update the description in the session state dataframe
                     st.session_state.quote_items.at[selected_index, 'Description'] = response.text.strip()
                     st.toast("Description summarized!", icon="✅")
-                    st.rerun() # Rerun to show the updated description in the table
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Failed to summarize: {e}")
 
@@ -401,10 +411,8 @@ else:
             submitted = st.form_submit_button("Generate Final Quote HTML", type="primary", use_container_width=True)
 
         if submitted:
-            # Generate the HTML content for the quote
             items_html = ""
             for i, row in df.iterrows():
-                # --- MODIFIED: Merged CAT_NO and Description ---
                 product_details_html = f"""
                 <td class="p-3 w-1/3">
                     <strong class="block text-xs font-bold">{row['CAT_NO']}</strong>
@@ -433,7 +441,6 @@ else:
             if st.session_state.header_image_b64:
                 header_image_html = f'<img src="data:image/png;base64,{st.session_state.header_image_b64}" alt="Custom Header" class="max-h-24 object-contain">'
 
-            # --- MODIFIED: Updated table headers in HTML ---
             quote_html = f"""
             <!DOCTYPE html>
             <html lang="en">
@@ -515,4 +522,5 @@ else:
                 mime='text/html',
                 use_container_width=True
             )
+
 
