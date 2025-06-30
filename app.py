@@ -7,6 +7,7 @@ import json
 import base64
 import re
 from io import BytesIO
+from pathlib import Path # Import Path for file handling
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -34,7 +35,7 @@ st.markdown("""
     [data-testid="stSidebar"] {
         background-color: #0f172a; /* Slate 900 */
     }
-    /* --- NEW: Sidebar text color for better contrast --- */
+    /* --- Sidebar text color for better contrast --- */
     [data-testid="stSidebar"] .st-emotion-cache-1gulkj5,
     [data-testid="stSidebar"] .st-emotion-cache-taue2i,
     [data-testid="stSidebar"] h1,
@@ -69,6 +70,15 @@ def image_to_base64(image_file):
         bytes_data = image_file.getvalue()
         return base64.b64encode(bytes_data).decode()
     return None
+
+def get_logo_base64(file_path):
+    """Reads a local image file and returns its base64 representation."""
+    try:
+        with open(file_path, "rb") as img_file:
+            return base64.b64encode(img_file.read()).decode()
+    except FileNotFoundError:
+        st.warning(f"Logo file not found at {file_path}. Please ensure it is in the same directory as the app script and the repository is updated.")
+        return None
 
 def format_currency(num):
     """Formats a number as Australian currency."""
@@ -139,7 +149,9 @@ if "header_image_b64" not in st.session_state:
     st.session_state.header_image_b64 = None
 
 if "company_logo_b64" not in st.session_state:
-    st.session_state.company_logo_b64 = None
+    # --- MODIFIED: Updated logo filename ---
+    logo_file_path = Path(__file__).parent / "AWM Logo (002).png"
+    st.session_state.company_logo_b64 = get_logo_base64(logo_file_path)
 
 
 # --- Main Application UI ---
@@ -172,15 +184,17 @@ with st.sidebar:
 
     st.subheader("2. Global Settings")
     global_margin = st.number_input("Global Margin (%)", value=9.0, min_value=0.0, step=1.0, format="%.2f")
-    if st.button("Apply Global Margin", use_container_width=True):
+    # --- MODIFIED: Added type="primary" for visibility ---
+    if st.button("Apply Global Margin", type="primary", use_container_width=True):
         if not st.session_state.quote_items.empty:
             st.session_state.quote_items['MARGIN'] = global_margin
             st.toast(f"Applied {global_margin}% margin to all items.")
             st.rerun()
         else:
             st.warning("No items in the quote to apply margin to.")
-
-    if st.button("Clear All Quote Items", use_container_width=True):
+    
+    # --- MODIFIED: Added type="primary" for visibility ---
+    if st.button("Clear All Quote Items", type="primary", use_container_width=True):
         st.session_state.quote_items = pd.DataFrame(columns=[
             "TYPE", "QTY", "Supplier", "CAT_NO", "Description",
             "COST_PER_UNIT", "DISC", "MARGIN"
@@ -191,10 +205,9 @@ with st.sidebar:
     st.divider()
 
     st.subheader("3. Quote Customization")
-    company_logo = st.file_uploader("Upload Company Logo", type=['png', 'jpg', 'jpeg'], help="Upload your main company logo. This will be embedded in the quote.")
-    if company_logo:
-        st.session_state.company_logo_b64 = image_to_base64(company_logo)
-        st.image(company_logo, caption="Company logo preview", width=200)
+    if st.session_state.company_logo_b64:
+        st.write("Company Logo:")
+        st.image(f"data:image/png;base64,{st.session_state.company_logo_b64}", width=200)
 
     header_image = st.file_uploader("Upload Custom Header Image (Optional)", type=['png', 'jpg', 'jpeg'], help="Optional: Upload a banner image for the quote header.")
     if header_image:
@@ -288,7 +301,7 @@ if process_button and uploaded_files:
 
 # --- Main Content Area ---
 if st.session_state.quote_items.empty:
-    st.info("Upload your company logo and supplier quotes using the sidebar to get started.")
+    st.info("Upload your supplier quotes using the sidebar to get started. The company logo is pre-loaded.")
 else:
     with st.container():
         if st.session_state.project_summary:
@@ -299,14 +312,11 @@ else:
         st.subheader("Quote Line Items")
         st.caption("You can edit values directly in the table below. Calculations will update automatically.")
         
-        # --- START: Modified Data Editor Section ---
         df_for_editing = st.session_state.quote_items.copy()
         
-        # Ensure numeric types for calculation
         for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
             df_for_editing[col] = pd.to_numeric(df_for_editing[col], errors='coerce').fillna(0)
             
-        # Add the new calculated columns for display
         cost_after_disc = df_for_editing['COST_PER_UNIT'] * (1 - df_for_editing['DISC'] / 100)
         df_for_editing['SELL_UNIT_EX_GST'] = cost_after_disc * (1 + df_for_editing['MARGIN'] / 100)
         df_for_editing['SELL_TOTAL_EX_GST'] = df_for_editing['SELL_UNIT_EX_GST'] * df_for_editing['QTY']
@@ -318,7 +328,6 @@ else:
                 "DISC": st.column_config.NumberColumn("Disc %", format="%.1f%%"),
                 "MARGIN": st.column_config.NumberColumn("Margin %", format="%.1f%%"),
                 "Description": st.column_config.TextColumn("Description", width="large"),
-                # --- NEW: Config for calculated customer-facing prices ---
                 "SELL_UNIT_EX_GST": st.column_config.NumberColumn(
                     "Unit Price Ex GST",
                     help="The selling price per unit after discount and margin.",
@@ -335,20 +344,17 @@ else:
             column_order=[
                 "TYPE", "QTY", "Supplier", "CAT_NO", "Description",
                 "COST_PER_UNIT", "DISC", "MARGIN", 
-                "SELL_UNIT_EX_GST", "SELL_TOTAL_EX_GST" # New column order
+                "SELL_UNIT_EX_GST", "SELL_TOTAL_EX_GST"
             ],
             num_rows="dynamic",
             use_container_width=True,
             key="data_editor"
         )
         
-        # Save changes back to session state, dropping the temporary calculated columns
         if not edited_df.equals(df_for_editing):
              st.session_state.quote_items = edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST'])
              st.rerun()
-        # --- END: Modified Data Editor Section ---
 
-        # --- AI Description Summarizer ---
         st.divider()
         st.subheader("✍️ AI Description Summarizer")
         st.caption("Select an item to generate a shorter, more client-friendly description.")
@@ -376,7 +382,6 @@ else:
                 except Exception as e:
                     st.error(f"Failed to summarize: {e}")
 
-        # --- Real-time Calculations for Totals ---
         df = st.session_state.quote_items.copy()
         for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
@@ -522,5 +527,4 @@ else:
                 mime='text/html',
                 use_container_width=True
             )
-
 
