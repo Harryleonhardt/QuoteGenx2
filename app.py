@@ -178,6 +178,10 @@ if "company_logo_b64" not in st.session_state:
     logo_file_path = Path(__file__).parent / "AWM Logo (002).png"
     st.session_state.company_logo_b64 = get_logo_base64(logo_file_path)
 
+# --- NEW: Initialize sort order state ---
+if "sort_by" not in st.session_state:
+    st.session_state.sort_by = "Type"
+
 
 # --- Main Application UI ---
 
@@ -338,24 +342,35 @@ else:
             st.divider()
 
         st.subheader("Quote Line Items")
+        
+        # --- NEW: Sorting Feature ---
+        sort_option = st.radio(
+            "Sort items by:",
+            ("Type", "Supplier"),
+            horizontal=True,
+            key="sort_by"
+        )
+        
+        # Sort the DataFrame based on the selected option
+        df_to_edit = st.session_state.quote_items.copy()
+        if sort_option == 'Type':
+            df_to_edit = df_to_edit.sort_values(by='TYPE').reset_index(drop=True)
+        elif sort_option == 'Supplier':
+            df_to_edit = df_to_edit.sort_values(by='Supplier').reset_index(drop=True)
+        
         st.caption("You can edit values directly in the table below. Calculations will update automatically.")
         
-        # Create a copy for display and calculation
-        df_for_display = st.session_state.quote_items.copy()
+        df_for_display = df_to_edit.copy()
         
-        # Ensure correct data types for calculations
         for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
             df_for_display[col] = pd.to_numeric(df_for_display[col], errors='coerce').fillna(0)
             
-        # --- RE-VERIFIED: Margin calculation updated to Cost / (1 - Margin %) ---
         cost_after_disc = df_for_display['COST_PER_UNIT'] * (1 - df_for_display['DISC'] / 100)
         margin_divisor = (1 - df_for_display['MARGIN'] / 100)
         margin_divisor[margin_divisor <= 0] = 0.01 
         df_for_display['SELL_UNIT_EX_GST'] = cost_after_disc / margin_divisor
-
         df_for_display['SELL_TOTAL_EX_GST'] = df_for_display['SELL_UNIT_EX_GST'] * df_for_display['QTY']
         
-        # The data editor widget itself
         edited_df = st.data_editor(
             df_for_display,
             column_config={
@@ -363,51 +378,30 @@ else:
                 "DISC": st.column_config.NumberColumn("Disc %", format="%.1f%%"),
                 "MARGIN": st.column_config.NumberColumn("Margin %", format="%.1f%%", min_value=0, max_value=99.9),
                 "Description": st.column_config.TextColumn("Description", width="large"),
-                "SELL_UNIT_EX_GST": st.column_config.NumberColumn(
-                    "Unit Price Ex GST",
-                    help="The selling price per unit after discount and margin.",
-                    format="$%.2f",
-                    disabled=True
-                ),
-                "SELL_TOTAL_EX_GST": st.column_config.NumberColumn(
-                    "Line Price Ex GST",
-                    help="The total selling price for the line (= Unit Price Ex GST * QTY).",
-                    format="$%.2f",
-                    disabled=True
-                ),
+                "SELL_UNIT_EX_GST": st.column_config.NumberColumn("Unit Price Ex GST", help="= (Cost * (1-Disc)) / (1-Margin)", format="$%.2f", disabled=True),
+                "SELL_TOTAL_EX_GST": st.column_config.NumberColumn("Line Price Ex GST", help="= Unit Price Ex GST * QTY", format="$%.2f", disabled=True),
             },
-            column_order=[
-                "TYPE", "QTY", "Supplier", "CAT_NO", "Description",
-                "COST_PER_UNIT", "DISC", "MARGIN", 
-                "SELL_UNIT_EX_GST", "SELL_TOTAL_EX_GST"
-            ],
+            column_order=["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT", "DISC", "MARGIN", "SELL_UNIT_EX_GST", "SELL_TOTAL_EX_GST"],
             num_rows="dynamic",
             use_container_width=True,
             key="data_editor"
         )
         
-        # --- MODIFIED: Update state smoothly without a full rerun on every edit ---
-        if not st.session_state.quote_items.equals(edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST'])):
-            st.session_state.quote_items = edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST'])
+        if not df_to_edit.equals(edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST'])):
+            st.session_state.quote_items = edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST']).reset_index(drop=True)
             st.rerun()
 
-        # --- NEW: Intuitive Row Insertion/Deletion Feature ---
         st.divider()
         st.subheader("Row Operations")
         
         row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in st.session_state.quote_items.iterrows()]
         
-        selected_row_str = st.selectbox(
-            "Select a row to modify:", 
-            options=row_options, 
-            index=None, 
-            placeholder="Choose a row..."
-        )
+        selected_row_str = st.selectbox("Select a row to modify:", options=row_options, index=None, placeholder="Choose a row...")
 
         if selected_row_str:
             selected_index = row_options.index(selected_row_str)
             
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             
             if c1.button("Add Row Above", use_container_width=True):
                 new_row = pd.DataFrame([{"TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "", "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": global_margin}])
@@ -421,12 +415,16 @@ else:
                 st.session_state.quote_items = updated_df
                 st.rerun()
 
-        # --- AI Description Summarizer ---
+            if c3.button("Delete Selected Row", use_container_width=True):
+                updated_df = st.session_state.quote_items.drop(st.session_state.quote_items.index[selected_index]).reset_index(drop=True)
+                st.session_state.quote_items = updated_df
+                st.rerun()
+
         st.divider()
         st.subheader("✍️ AI Description Summarizer")
         st.caption("Select an item to generate a shorter, more client-friendly description.")
         
-        selected_item_str_for_summary = st.selectbox("Select Item to Summarize", options=row_options, index=None, placeholder="Choose an item...")
+        selected_item_str_for_summary = st.selectbox("Select Item to Summarize", options=row_options, index=None, placeholder="Choose an item...", key="summary_selectbox")
         
         if st.button("Summarize Description", use_container_width=True, disabled=not selected_item_str_for_summary):
             selected_index = row_options.index(selected_item_str_for_summary)
@@ -444,7 +442,6 @@ else:
                 except Exception as e:
                     st.error(f"Failed to summarize: {e}")
 
-        # Final calculations for totals are based on the latest state
         df_for_totals = st.session_state.quote_items.copy()
         for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
             df_for_totals[col] = pd.to_numeric(df_for_totals[col], errors='coerce').fillna(0)
@@ -455,16 +452,20 @@ else:
         df_for_totals['SELL_UNIT_EX_GST'] = cost_after_disc / margin_divisor
         df_for_totals['SELL_TOTAL_EX_GST'] = df_for_totals['SELL_UNIT_EX_GST'] * df_for_totals['QTY']
         
+        total_cost_pre_margin = (cost_after_disc * df_for_totals['QTY']).sum()
+        
         gst_rate = 10
         df_for_totals['GST_AMOUNT'] = df_for_totals['SELL_TOTAL_EX_GST'] * (gst_rate / 100)
         df_for_totals['SELL_TOTAL_INC_GST'] = df_for_totals['SELL_TOTAL_EX_GST'] + df_for_totals['GST_AMOUNT']
 
         st.divider()
         st.subheader("Quote Totals")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Sub-Total (ex. GST)", format_currency(df_for_totals['SELL_TOTAL_EX_GST'].sum()))
-        col2.metric("GST (10%)", format_currency(df_for_totals['GST_AMOUNT'].sum()))
-        col3.metric("Grand Total (inc. GST)", format_currency(df_for_totals['SELL_TOTAL_INC_GST'].sum()))
+        # --- NEW: Added Total Cost metric ---
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Cost (Pre-Margin)", format_currency(total_cost_pre_margin))
+        col2.metric("Sub-Total (ex. GST)", format_currency(df_for_totals['SELL_TOTAL_EX_GST'].sum()))
+        col3.metric("GST (10%)", format_currency(df_for_totals['GST_AMOUNT'].sum()))
+        col4.metric("Grand Total (inc. GST)", format_currency(df_for_totals['SELL_TOTAL_INC_GST'].sum()))
 
         st.divider()
         st.header("Finalise and Generate Quote")
@@ -482,8 +483,15 @@ else:
             submitted = st.form_submit_button("Generate Final Quote PDF", type="primary", use_container_width=True)
 
         if submitted:
+            # Sort the final DataFrame for the PDF according to the user's selection
+            final_df = st.session_state.quote_items.copy()
+            if st.session_state.sort_by == 'Type':
+                final_df = final_df.sort_values(by='TYPE').reset_index(drop=True)
+            elif st.session_state.sort_by == 'Supplier':
+                final_df = final_df.sort_values(by='Supplier').reset_index(drop=True)
+
             items_html = ""
-            for i, row in df_for_totals.iterrows():
+            for i, row in final_df.iterrows():
                 product_details_html = f"""
                 <td class="p-2 w-1/3 align-top">
                     <strong class="block text-xs font-bold">{row['CAT_NO']}</strong>
@@ -512,12 +520,10 @@ else:
             if st.session_state.header_image_b64:
                 header_image_html = f'<img src="data:image/png;base64,{st.session_state.header_image_b64}" alt="Custom Header" class="max-h-24 object-contain">'
             
-            # --- NEW: Add branch address conditionally ---
             branch_address_html = ""
             if st.session_state.user_details['branch'] == "AWM Nunawading":
                 branch_address_html = '<p class="text-sm text-gray-600">31-33 Rooks Road, Nunawading, 3131</p>'
 
-            # --- NEW: Bold "Attn:" text ---
             attention_html = f'<p class="text-gray-700"><strong class="font-bold text-gray-800">Attn:</strong> {q_details["attention"] or "N/A"}</p>'
 
             quote_html = f"""
@@ -574,7 +580,6 @@ else:
                             <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{format_currency(df_for_totals['SELL_TOTAL_INC_GST'].sum())}</span></div>
                         </div>
                     </footer>
-                    <!-- MODIFIED: Removed border classes from this div -->
                     <div class="mt-12 pt-8" style="page-break-inside: avoid;">
                         <h3 class="font-bold text-gray-800">Prepared For You By:</h3>
                         <p class="text-gray-700 mt-2">{st.session_state.user_details['name']}</p>
@@ -595,27 +600,25 @@ else:
             pdf_css = """
                 @page {
                     size: A4;
-                    margin: 1.5cm; /* Standard A4 margins */
+                    margin: 1.5cm;
                 }
                 body {
                     font-family: 'Inter', sans-serif;
                 }
                 thead { 
-                    display: table-header-group; /* This is the key for repeating headers */
+                    display: table-header-group; 
                 }
                 tfoot {
                     display: table-footer-group;
                 }
-                tr { 
-                    page-break-inside: avoid; 
-                }
+                /* MODIFIED: Removed page-break-inside: avoid from tr to prevent large gaps */
                 table {
                     width: 100%;
                     border-collapse: collapse;
                 }
                 th, td {
                     text-align: left;
-                    padding: 4px 6px; /* Reduced padding for better fit */
+                    padding: 4px 6px;
                     vertical-align: top;
                 }
                 th {
