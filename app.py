@@ -193,7 +193,7 @@ with st.sidebar:
         st.session_state.user_details['job_title'] = st.text_input("Job Title", value=st.session_state.user_details['job_title'])
         st.session_state.user_details['branch'] = st.text_input("Branch", value=st.session_state.user_details['branch'])
         st.session_state.user_details['email'] = st.text_input("Your Email", value=st.session_state.user_details['email'])
-        st.session_state.user_details['phone'] = st.text_input("Your Phone", value=st.session_state.user_details['phone'])
+        st.session_state.user_details['phone'] = st.text_input("Your Phone", valuest.session_state.user_details['phone'])
 
     st.subheader("1. Upload Supplier Quotes")
     uploaded_files = st.file_uploader(
@@ -208,7 +208,7 @@ with st.sidebar:
     st.divider()
 
     st.subheader("2. Global Settings")
-    global_margin = st.number_input("Global Margin (%)", value=9.0, min_value=0.0, step=1.0, format="%.2f")
+    global_margin = st.number_input("Global Margin (%)", value=9.0, min_value=0.0, max_value=99.9, step=1.0, format="%.2f")
     
     if st.button("Apply Global Margin", use_container_width=True):
         if not st.session_state.quote_items.empty:
@@ -340,21 +340,30 @@ else:
         st.subheader("Quote Line Items")
         st.caption("You can edit values directly in the table below. Calculations will update automatically.")
         
-        df_for_editing = st.session_state.quote_items.copy()
+        # --- MODIFIED: Logic to handle edits without jarring reruns ---
+        # Create a copy for display and calculation
+        df_for_display = st.session_state.quote_items.copy()
         
+        # Ensure correct data types for calculations
         for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
-            df_for_editing[col] = pd.to_numeric(df_for_editing[col], errors='coerce').fillna(0)
+            df_for_display[col] = pd.to_numeric(df_for_display[col], errors='coerce').fillna(0)
             
-        cost_after_disc = df_for_editing['COST_PER_UNIT'] * (1 - df_for_editing['DISC'] / 100)
-        df_for_editing['SELL_UNIT_EX_GST'] = cost_after_disc * (1 + df_for_editing['MARGIN'] / 100)
-        df_for_editing['SELL_TOTAL_EX_GST'] = df_for_editing['SELL_UNIT_EX_GST'] * df_for_editing['QTY']
+        # --- MODIFIED: Margin calculation updated ---
+        cost_after_disc = df_for_display['COST_PER_UNIT'] * (1 - df_for_display['DISC'] / 100)
+        # Prevent division by zero if margin is 100%
+        margin_divisor = (1 - df_for_display['MARGIN'] / 100)
+        margin_divisor[margin_divisor <= 0] = 0.01 # Set a floor to prevent errors
+        df_for_display['SELL_UNIT_EX_GST'] = cost_after_disc / margin_divisor
+
+        df_for_display['SELL_TOTAL_EX_GST'] = df_for_display['SELL_UNIT_EX_GST'] * df_for_display['QTY']
         
+        # The data editor widget itself
         edited_df = st.data_editor(
-            df_for_editing,
+            df_for_display,
             column_config={
                 "COST_PER_UNIT": st.column_config.NumberColumn("Cost/Unit", format="$%.2f"),
                 "DISC": st.column_config.NumberColumn("Disc %", format="%.1f%%"),
-                "MARGIN": st.column_config.NumberColumn("Margin %", format="%.1f%%"),
+                "MARGIN": st.column_config.NumberColumn("Margin %", format="%.1f%%", min_value=0, max_value=99.9),
                 "Description": st.column_config.TextColumn("Description", width="large"),
                 "SELL_UNIT_EX_GST": st.column_config.NumberColumn(
                     "Unit Price Ex GST",
@@ -379,10 +388,46 @@ else:
             key="data_editor"
         )
         
-        if not edited_df.equals(df_for_editing):
-             st.session_state.quote_items = edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST'])
-             st.rerun()
+        # --- MODIFIED: Update state smoothly without a full rerun ---
+        # This assignment happens on every script run, keeping the UI in sync with edits.
+        st.session_state.quote_items = edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST'])
 
+        # --- NEW: Row Insertion Feature ---
+        st.divider()
+        st.subheader("Row Operations")
+        
+        c1, c2 = st.columns([1, 3])
+        # Use 1-based indexing for user-friendliness
+        row_to_insert_after = c1.number_input(
+            "Insert new row after row number:", 
+            min_value=1, 
+            max_value=len(st.session_state.quote_items), 
+            step=1,
+            help="Enter the row number you want to insert a new blank row after."
+        )
+        
+        c2.write("") # Spacer
+        c2.write("") # Spacer
+        if c2.button("Insert New Row Below", use_container_width=True):
+            current_df = st.session_state.quote_items.copy()
+            insert_index = int(row_to_insert_after) # Convert to integer index
+            
+            # Create a new blank row as a DataFrame
+            new_row = pd.DataFrame([{
+                "TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "",
+                "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": global_margin
+            }])
+            
+            # Split, concatenate, and reset the index
+            top_half = current_df.iloc[:insert_index]
+            bottom_half = current_df.iloc[insert_index:]
+            
+            updated_df = pd.concat([top_half, new_row, bottom_half], ignore_index=True)
+            
+            st.session_state.quote_items = updated_df
+            st.rerun() # Rerun is needed here to redraw the table with the new row
+
+        # --- AI Description Summarizer ---
         st.divider()
         st.subheader("✍️ AI Description Summarizer")
         st.caption("Select an item to generate a shorter, more client-friendly description.")
@@ -410,23 +455,27 @@ else:
                 except Exception as e:
                     st.error(f"Failed to summarize: {e}")
 
-        df = st.session_state.quote_items.copy()
+        # Final calculations for totals are based on the latest state
+        df_for_totals = st.session_state.quote_items.copy()
         for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            df_for_totals[col] = pd.to_numeric(df_for_totals[col], errors='coerce').fillna(0)
 
-        cost_after_disc = df['COST_PER_UNIT'] * (1 - df['DISC'] / 100)
-        df['SELL_UNIT_EX_GST'] = cost_after_disc * (1 + df['MARGIN'] / 100)
-        df['SELL_TOTAL_EX_GST'] = df['SELL_UNIT_EX_GST'] * df['QTY']
+        cost_after_disc = df_for_totals['COST_PER_UNIT'] * (1 - df_for_totals['DISC'] / 100)
+        margin_divisor = (1 - df_for_totals['MARGIN'] / 100)
+        margin_divisor[margin_divisor <= 0] = 0.01
+        df_for_totals['SELL_UNIT_EX_GST'] = cost_after_disc / margin_divisor
+        df_for_totals['SELL_TOTAL_EX_GST'] = df_for_totals['SELL_UNIT_EX_GST'] * df_for_totals['QTY']
+        
         gst_rate = 10
-        df['GST_AMOUNT'] = df['SELL_TOTAL_EX_GST'] * (gst_rate / 100)
-        df['SELL_TOTAL_INC_GST'] = df['SELL_TOTAL_EX_GST'] + df['GST_AMOUNT']
+        df_for_totals['GST_AMOUNT'] = df_for_totals['SELL_TOTAL_EX_GST'] * (gst_rate / 100)
+        df_for_totals['SELL_TOTAL_INC_GST'] = df_for_totals['SELL_TOTAL_EX_GST'] + df_for_totals['GST_AMOUNT']
 
         st.divider()
         st.subheader("Quote Totals")
         col1, col2, col3 = st.columns(3)
-        col1.metric("Sub-Total (ex. GST)", format_currency(df['SELL_TOTAL_EX_GST'].sum()))
-        col2.metric("GST (10%)", format_currency(df['GST_AMOUNT'].sum()))
-        col3.metric("Grand Total (inc. GST)", format_currency(df['SELL_TOTAL_INC_GST'].sum()))
+        col1.metric("Sub-Total (ex. GST)", format_currency(df_for_totals['SELL_TOTAL_EX_GST'].sum()))
+        col2.metric("GST (10%)", format_currency(df_for_totals['GST_AMOUNT'].sum()))
+        col3.metric("Grand Total (inc. GST)", format_currency(df_for_totals['SELL_TOTAL_INC_GST'].sum()))
 
         st.divider()
         st.header("Finalise and Generate Quote")
@@ -445,9 +494,9 @@ else:
 
         if submitted:
             items_html = ""
-            for i, row in df.iterrows():
+            for i, row in df_for_totals.iterrows():
                 product_details_html = f"""
-                <td class="p-2 w-1/3">
+                <td class="p-2 w-1/3 align-top">
                     <strong class="block text-xs font-bold">{row['CAT_NO']}</strong>
                     <span>{row['Description']}</span>
                 </td>
@@ -474,7 +523,6 @@ else:
             if st.session_state.header_image_b64:
                 header_image_html = f'<img src="data:image/png;base64,{st.session_state.header_image_b64}" alt="Custom Header" class="max-h-24 object-contain">'
 
-            # --- MODIFIED: Added comprehensive print and layout styles ---
             quote_html = f"""
             <!DOCTYPE html>
             <html lang="en">
@@ -482,73 +530,6 @@ else:
                 <meta charset="UTF-8">
                 <title>Quote {q_details['quoteNumber']}</title>
                 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
-                <style> 
-                    @page {{
-                        size: A4;
-                        margin: 1.5cm; /* Set even margins for the page */
-                    }}
-                    body {{ 
-                        font-family: 'Inter', sans-serif;
-                    }}
-                    thead {{ 
-                        display: table-header-group; /* Ensures header repeats on each page */
-                    }}
-                    tfoot {{
-                        display: table-footer-group;
-                    }}
-                    tr {{ 
-                        page-break-inside: avoid; /* Prevents rows from splitting across pages */
-                    }}
-                    .p-2 {{ padding: 0.3rem; }} /* Slightly reduced padding for a better fit */
-                    .p-4 {{ padding: 1rem; }}
-                    .p-6 {{ padding: 1.5rem; }}
-                    .w-full {{ width: 100%; }}
-                    .w-1/3 {{ width: 33.33%; }}
-                    .w-2/5 {{ width: 40%; }}
-                    .text-right {{ text-align: right; }}
-                    .text-left {{ text-align: left; }}
-                    .text-xs {{ font-size: 0.75rem; }}
-                    .text-sm {{ font-size: 0.875rem; }}
-                    .text-lg {{ font-size: 1.125rem; }}
-                    .text-2xl {{ font-size: 1.5rem; }}
-                    .text-3xl {{ font-size: 1.875rem; }}
-                    .font-bold {{ font-weight: 700; }}
-                    .bg-white {{ background-color: #ffffff; }}
-                    .bg-gray-50 {{ background-color: #f9fafb; }}
-                    .bg-gray-100 {{ background-color: #f3f4f6; }}
-                    .bg-slate-800 {{ background-color: #1e293b; }}
-                    .text-white {{ color: #ffffff; }}
-                    .text-gray-600 {{ color: #4b5563; }}
-                    .text-gray-700 {{ color: #374151; }}
-                    .text-gray-800 {{ color: #1f2937; }}
-                    .border {{ border-width: 1px; }}
-                    .border-b {{ border-bottom-width: 1px; }}
-                    .border-t-2 {{ border-top-width: 2px; }}
-                    .border-dashed {{ border-style: dashed; }}
-                    .border-gray-200 {{ border-color: #e5e7eb; }}
-                    .border-gray-300 {{ border-color: #d1d5db; }}
-                    .rounded-lg {{ border-radius: 0.5rem; }}
-                    .rounded-t-lg {{ border-top-left-radius: 0.5rem; border-top-right-radius: 0.5rem; }}
-                    .rounded-b-lg {{ border-bottom-left-radius: 0.5rem; border-bottom-right-radius: 0.5rem; }}
-                    .rounded-tl-lg {{ border-top-left-radius: 0.5rem; }}
-                    .rounded-tr-lg {{ border-top-right-radius: 0.5rem; }}
-                    .flex {{ display: flex; }}
-                    .justify-between {{ justify-content: space-between; }}
-                    .justify-end {{ justify-content: flex-end; }}
-                    .items-start {{ align-items: flex-start; }}
-                    .grid {{ display: grid; }}
-                    .grid-cols-2 {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
-                    .gap-6 {{ gap: 1.5rem; }}
-                    .mb-8 {{ margin-bottom: 2rem; }}
-                    .mt-12 {{ margin-top: 3rem; }}
-                    .mt-8 {{ margin-top: 2rem; }}
-                    .mt-4 {{ margin-top: 1rem; }}
-                    .mt-2 {{ margin-top: 0.5rem; }}
-                    .pb-8 {{ padding-bottom: 2rem; }}
-                    .pt-8 {{ padding-top: 2rem; }}
-                    .block {{ display: block; }}
-                    .align-top {{ vertical-align: top; }}
-                </style>
             </head>
             <body>
                 <div class="bg-white">
@@ -590,9 +571,9 @@ else:
                     </main>
                     <footer class="mt-8 flex justify-end" style="page-break-inside: avoid;">
                         <div class="w-2/5">
-                            <div class="flex justify-between p-2 bg-gray-100 rounded-t-lg"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(df['SELL_TOTAL_EX_GST'].sum())}</span></div>
-                            <div class="flex justify-between p-2"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{format_currency(df['GST_AMOUNT'].sum())}</span></div>
-                            <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{format_currency(df['SELL_TOTAL_INC_GST'].sum())}</span></div>
+                            <div class="flex justify-between p-2 bg-gray-100 rounded-t-lg"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(df_for_totals['SELL_TOTAL_EX_GST'].sum())}</span></div>
+                            <div class="flex justify-between p-2"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{format_currency(df_for_totals['GST_AMOUNT'].sum())}</span></div>
+                            <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{format_currency(df_for_totals['SELL_TOTAL_INC_GST'].sum())}</span></div>
                         </div>
                     </footer>
                     <div class="mt-12 pt-8 border-t-2 border-dashed border-gray-300" style="page-break-inside: avoid;">
@@ -612,34 +593,49 @@ else:
             </html>
             """
             
-            # Use a basic CSS string instead of fetching from a URL for reliability
-            # This string contains the core Tailwind utility classes needed for the layout.
-            # It's less comprehensive than the full library but more stable for PDF generation.
-            css_string = """
-                .p-2 { padding: 0.3rem; } .p-4 { padding: 1rem; } .p-6 { padding: 1.5rem; } .pb-8 { padding-bottom: 2rem; } .pt-8 { padding-top: 2rem; }
-                .mb-8 { margin-bottom: 2rem; } .mt-12 { margin-top: 3rem; } .mt-8 { margin-top: 2rem; } .mt-4 { margin-top: 1rem; } .mt-2 { margin-top: 0.5rem; }
-                .w-full { width: 100%; } .w-1/3 { width: 33.3333%; } .w-2/5 { width: 40%; }
-                .h-16 { height: 4rem; } .max-h-24 { max-height: 6rem; }
-                .text-right { text-align: right; } .text-left { text-align: left; }
-                .text-xs { font-size: 0.75rem; } .text-sm { font-size: 0.875rem; } .text-lg { font-size: 1.125rem; } .text-2xl { font-size: 1.5rem; } .text-3xl { font-size: 1.875rem; }
-                .font-bold { font-weight: 700; }
-                .bg-white { background-color: #ffffff; } .bg-gray-50 { background-color: #f9fafb; } .bg-gray-100 { background-color: #f3f4f6; } .bg-slate-800 { background-color: #1e293b; } .bg-blue-50 { background-color: #eff6ff; }
-                .text-white { color: #ffffff; } .text-gray-600 { color: #4b5563; } .text-gray-700 { color: #374151; } .text-gray-800 { color: #1f2937; } .text-blue-900 { color: #1e3a8a; }
-                .border { border-width: 1px; } .border-b { border-bottom-width: 1px; } .border-t-2 { border-top-width: 2px; } .border-dashed { border-style: dashed; }
-                .border-gray-200 { border-color: #e5e7eb; } .border-gray-300 { border-color: #d1d5db; } .border-blue-200 { border-color: #bfdbfe; }
-                .rounded-lg { border-radius: 0.5rem; } .rounded-t-lg { border-top-left-radius: 0.5rem; border-top-right-radius: 0.5rem; } .rounded-b-lg { border-bottom-left-radius: 0.5rem; border-bottom-right-radius: 0.5rem; } .rounded-tl-lg { border-top-left-radius: 0.5rem; } .rounded-tr-lg { border-top-right-radius: 0.5rem; }
-                .flex { display: flex; } .grid { display: grid; }
-                .justify-between { justify-content: space-between; } .justify-end { justify-content: flex-end; }
-                .items-start { align-items: flex-start; }
-                .grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-                .gap-6 { gap: 1.5rem; }
-                .divide-y > :not([hidden]) ~ :not([hidden]) { border-top-width: 1px; border-color: #e5e7eb; }
-                .whitespace-pre-wrap { white-space: pre-wrap; }
-                .object-contain { object-fit: contain; }
-                .block { display: block; } .align-top { vertical-align: top; }
+            # --- MODIFIED: Added specific CSS for print layout control ---
+            pdf_css = """
+                @page {
+                    size: A4;
+                    margin: 1.5cm; /* Standard A4 margins */
+                }
+                body {
+                    font-family: 'Inter', sans-serif;
+                }
+                thead { 
+                    display: table-header-group; /* This is the key for repeating headers */
+                }
+                tfoot {
+                    display: table-footer-group;
+                }
+                tr { 
+                    page-break-inside: avoid; 
+                }
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                }
+                th, td {
+                    text-align: left;
+                    padding: 4px 6px; /* Reduced padding for better fit */
+                    vertical-align: top;
+                }
+                th {
+                    background-color: #1e293b;
+                    color: white;
+                }
+                td.text-right, th.text-right {
+                    text-align: right;
+                }
             """
 
-            pdf_bytes = HTML(string=quote_html).write_pdf(stylesheets=[CSS(string=css_string)])
+            # Combine the Tailwind CDN with our print-specific overrides
+            combined_css = [
+                CSS(string='@import url("https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css");'),
+                CSS(string=pdf_css)
+            ]
+            
+            pdf_bytes = HTML(string=quote_html).write_pdf(stylesheets=combined_css)
 
             st.download_button(
                 label="✅ Download Final Quote as PDF",
