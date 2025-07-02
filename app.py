@@ -348,10 +348,8 @@ else:
             df_for_display[col] = pd.to_numeric(df_for_display[col], errors='coerce').fillna(0)
             
         # --- RE-VERIFIED: Margin calculation updated to Cost / (1 - Margin %) ---
-        # This formula calculates the final sell price needed to achieve a target margin on that sell price.
         cost_after_disc = df_for_display['COST_PER_UNIT'] * (1 - df_for_display['DISC'] / 100)
         margin_divisor = (1 - df_for_display['MARGIN'] / 100)
-        # Prevent division by zero or negative if margin is >= 100%
         margin_divisor[margin_divisor <= 0] = 0.01 
         df_for_display['SELL_UNIT_EX_GST'] = cost_after_disc / margin_divisor
 
@@ -397,7 +395,6 @@ else:
         st.divider()
         st.subheader("Row Operations")
         
-        # Create a list of rows for the user to select from
         row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in st.session_state.quote_items.iterrows()]
         
         selected_row_str = st.selectbox(
@@ -408,7 +405,6 @@ else:
         )
 
         if selected_row_str:
-            # Find the index of the selected row
             selected_index = row_options.index(selected_row_str)
             
             c1, c2 = st.columns(2)
@@ -430,7 +426,6 @@ else:
         st.subheader("✍️ AI Description Summarizer")
         st.caption("Select an item to generate a shorter, more client-friendly description.")
         
-        # Re-use the row_options from the section above
         selected_item_str_for_summary = st.selectbox("Select Item to Summarize", options=row_options, index=None, placeholder="Choose an item...")
         
         if st.button("Summarize Description", use_container_width=True, disabled=not selected_item_str_for_summary):
@@ -516,6 +511,14 @@ else:
             header_image_html = ""
             if st.session_state.header_image_b64:
                 header_image_html = f'<img src="data:image/png;base64,{st.session_state.header_image_b64}" alt="Custom Header" class="max-h-24 object-contain">'
+            
+            # --- NEW: Add branch address conditionally ---
+            branch_address_html = ""
+            if st.session_state.user_details['branch'] == "AWM Nunawading":
+                branch_address_html = '<p class="text-sm text-gray-600">31-33 Rooks Road, Nunawading, 3131</p>'
+
+            # --- NEW: Bold "Attn:" text ---
+            attention_html = f'<p class="text-gray-700"><strong class="font-bold text-gray-800">Attn:</strong> {q_details["attention"] or "N/A"}</p>'
 
             quote_html = f"""
             <!DOCTYPE html>
@@ -531,6 +534,7 @@ else:
                         <div>
                             {company_logo_html}
                             <h1 class="text-2xl font-bold text-gray-800">{st.session_state.user_details['branch']}</h1>
+                            {branch_address_html}
                             <p class="text-sm text-gray-600">A Division of Metal Manufactures Limited (A.B.N. 13 003 762 641)</p>
                         </div>
                         <div class="text-right">
@@ -542,7 +546,7 @@ else:
                         <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
                             <h2 class="font-bold text-gray-800 mb-2">QUOTE TO:</h2>
                             <p class="text-gray-700">{q_details['customerName']}</p>
-                            <p class="text-gray-700">Attn: {q_details['attention'] or 'N/A'}</p>
+                            {attention_html}
                         </div>
                         <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
                              <p class="text-gray-700"><strong class="font-bold text-gray-800">PROJECT:</strong> {q_details['projectName']}</p>
@@ -570,7 +574,8 @@ else:
                             <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{format_currency(df_for_totals['SELL_TOTAL_INC_GST'].sum())}</span></div>
                         </div>
                     </footer>
-                    <div class="mt-12 pt-8 border-t-2 border-dashed border-gray-300" style="page-break-inside: avoid;">
+                    <!-- MODIFIED: Removed border classes from this div -->
+                    <div class="mt-12 pt-8" style="page-break-inside: avoid;">
                         <h3 class="font-bold text-gray-800">Prepared For You By:</h3>
                         <p class="text-gray-700 mt-2">{st.session_state.user_details['name']}</p>
                         <p class="text-gray-600 text-sm">{st.session_state.user_details['job_title']}</p>
