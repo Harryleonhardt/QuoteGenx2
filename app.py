@@ -483,12 +483,23 @@ else:
             submitted = st.form_submit_button("Generate Final Quote PDF", type="primary", use_container_width=True)
 
         if submitted:
-            # Sort the final DataFrame for the PDF according to the user's selection
+            # --- FIX: Perform calculations on the final DataFrame before generating HTML ---
             final_df = st.session_state.quote_items.copy()
             if st.session_state.sort_by == 'Type':
                 final_df = final_df.sort_values(by='TYPE').reset_index(drop=True)
             elif st.session_state.sort_by == 'Supplier':
                 final_df = final_df.sort_values(by='Supplier').reset_index(drop=True)
+            
+            # Ensure numeric types for calculation
+            for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
+                final_df[col] = pd.to_numeric(final_df[col], errors='coerce').fillna(0)
+            
+            # Perform the same calculations as used for display
+            final_cost_after_disc = final_df['COST_PER_UNIT'] * (1 - final_df['DISC'] / 100)
+            final_margin_divisor = (1 - final_df['MARGIN'] / 100)
+            final_margin_divisor[final_margin_divisor <= 0] = 0.01
+            final_df['SELL_UNIT_EX_GST'] = final_cost_after_disc / final_margin_divisor
+            final_df['SELL_TOTAL_EX_GST'] = final_df['SELL_UNIT_EX_GST'] * final_df['QTY']
 
             items_html = ""
             for i, row in final_df.iterrows():
