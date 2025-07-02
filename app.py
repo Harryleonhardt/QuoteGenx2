@@ -193,7 +193,7 @@ with st.sidebar:
         st.session_state.user_details['job_title'] = st.text_input("Job Title", value=st.session_state.user_details['job_title'])
         st.session_state.user_details['branch'] = st.text_input("Branch", value=st.session_state.user_details['branch'])
         st.session_state.user_details['email'] = st.text_input("Your Email", value=st.session_state.user_details['email'])
-        st.session_state.user_details['phone'] = st.text_input("Your Phone", valuest.session_state.user_details['phone'])
+        st.session_state.user_details['phone'] = st.text_input("Your Phone", value=st.session_state.user_details['phone'])
 
     st.subheader("1. Upload Supplier Quotes")
     uploaded_files = st.file_uploader(
@@ -340,7 +340,6 @@ else:
         st.subheader("Quote Line Items")
         st.caption("You can edit values directly in the table below. Calculations will update automatically.")
         
-        # --- MODIFIED: Logic to handle edits without jarring reruns ---
         # Create a copy for display and calculation
         df_for_display = st.session_state.quote_items.copy()
         
@@ -348,11 +347,12 @@ else:
         for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
             df_for_display[col] = pd.to_numeric(df_for_display[col], errors='coerce').fillna(0)
             
-        # --- MODIFIED: Margin calculation updated ---
+        # --- RE-VERIFIED: Margin calculation updated to Cost / (1 - Margin %) ---
+        # This formula calculates the final sell price needed to achieve a target margin on that sell price.
         cost_after_disc = df_for_display['COST_PER_UNIT'] * (1 - df_for_display['DISC'] / 100)
-        # Prevent division by zero if margin is 100%
         margin_divisor = (1 - df_for_display['MARGIN'] / 100)
-        margin_divisor[margin_divisor <= 0] = 0.01 # Set a floor to prevent errors
+        # Prevent division by zero or negative if margin is >= 100%
+        margin_divisor[margin_divisor <= 0] = 0.01 
         df_for_display['SELL_UNIT_EX_GST'] = cost_after_disc / margin_divisor
 
         df_for_display['SELL_TOTAL_EX_GST'] = df_for_display['SELL_UNIT_EX_GST'] * df_for_display['QTY']
@@ -388,59 +388,53 @@ else:
             key="data_editor"
         )
         
-        # --- MODIFIED: Update state smoothly without a full rerun ---
-        # This assignment happens on every script run, keeping the UI in sync with edits.
-        st.session_state.quote_items = edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST'])
+        # --- MODIFIED: Update state smoothly without a full rerun on every edit ---
+        if not st.session_state.quote_items.equals(edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST'])):
+            st.session_state.quote_items = edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST'])
+            st.rerun()
 
-        # --- NEW: Row Insertion Feature ---
+        # --- NEW: Intuitive Row Insertion/Deletion Feature ---
         st.divider()
         st.subheader("Row Operations")
         
-        c1, c2 = st.columns([1, 3])
-        # Use 1-based indexing for user-friendliness
-        row_to_insert_after = c1.number_input(
-            "Insert new row after row number:", 
-            min_value=1, 
-            max_value=len(st.session_state.quote_items), 
-            step=1,
-            help="Enter the row number you want to insert a new blank row after."
-        )
+        # Create a list of rows for the user to select from
+        row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in st.session_state.quote_items.iterrows()]
         
-        c2.write("") # Spacer
-        c2.write("") # Spacer
-        if c2.button("Insert New Row Below", use_container_width=True):
-            current_df = st.session_state.quote_items.copy()
-            insert_index = int(row_to_insert_after) # Convert to integer index
+        selected_row_str = st.selectbox(
+            "Select a row to modify:", 
+            options=row_options, 
+            index=None, 
+            placeholder="Choose a row..."
+        )
+
+        if selected_row_str:
+            # Find the index of the selected row
+            selected_index = row_options.index(selected_row_str)
             
-            # Create a new blank row as a DataFrame
-            new_row = pd.DataFrame([{
-                "TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "",
-                "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": global_margin
-            }])
+            c1, c2 = st.columns(2)
             
-            # Split, concatenate, and reset the index
-            top_half = current_df.iloc[:insert_index]
-            bottom_half = current_df.iloc[insert_index:]
-            
-            updated_df = pd.concat([top_half, new_row, bottom_half], ignore_index=True)
-            
-            st.session_state.quote_items = updated_df
-            st.rerun() # Rerun is needed here to redraw the table with the new row
+            if c1.button("Add Row Above", use_container_width=True):
+                new_row = pd.DataFrame([{"TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "", "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": global_margin}])
+                updated_df = pd.concat([st.session_state.quote_items.iloc[:selected_index], new_row, st.session_state.quote_items.iloc[selected_index:]], ignore_index=True)
+                st.session_state.quote_items = updated_df
+                st.rerun()
+
+            if c2.button("Add Row Below", use_container_width=True):
+                new_row = pd.DataFrame([{"TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "", "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": global_margin}])
+                updated_df = pd.concat([st.session_state.quote_items.iloc[:selected_index+1], new_row, st.session_state.quote_items.iloc[selected_index+1:]], ignore_index=True)
+                st.session_state.quote_items = updated_df
+                st.rerun()
 
         # --- AI Description Summarizer ---
         st.divider()
         st.subheader("✍️ AI Description Summarizer")
         st.caption("Select an item to generate a shorter, more client-friendly description.")
         
-        item_options = [f"Row {i+1}: {row['Description'][:70]}..." for i, row in st.session_state.quote_items.iterrows()]
+        # Re-use the row_options from the section above
+        selected_item_str_for_summary = st.selectbox("Select Item to Summarize", options=row_options, index=None, placeholder="Choose an item...")
         
-        col1, col2 = st.columns([3, 1])
-        selected_item_str = col1.selectbox("Select Item to Summarize", options=item_options, index=None, placeholder="Choose an item...")
-        
-        summarize_button = col2.button("Summarize Description", use_container_width=True, disabled=not selected_item_str)
-        
-        if summarize_button and selected_item_str:
-            selected_index = item_options.index(selected_item_str)
+        if st.button("Summarize Description", use_container_width=True, disabled=not selected_item_str_for_summary):
+            selected_index = row_options.index(selected_item_str_for_summary)
             original_description = st.session_state.quote_items.at[selected_index, 'Description']
             
             with st.spinner("🤖 Gemini is summarizing..."):
@@ -593,7 +587,6 @@ else:
             </html>
             """
             
-            # --- MODIFIED: Added specific CSS for print layout control ---
             pdf_css = """
                 @page {
                     size: A4;
@@ -629,7 +622,6 @@ else:
                 }
             """
 
-            # Combine the Tailwind CDN with our print-specific overrides
             combined_css = [
                 CSS(string='@import url("https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css");'),
                 CSS(string=pdf_css)
