@@ -207,8 +207,12 @@ if not st.session_state.quote_items.empty:
         sort_option = st.radio("Sort items by:", ("Type", "Supplier", "Manual Order"), horizontal=True, key="sort_by")
         
         df_to_display = st.session_state.quote_items.copy()
-        if sort_option != "Manual Order":
-            df_to_display = df_to_display.sort_values(by=sort_option, kind='stable').reset_index(drop=True)
+        
+        # --- FIX: Map user-friendly sort option to the actual column name ---
+        if sort_option == "Type":
+            df_to_display = df_to_display.sort_values(by='TYPE', kind='stable').reset_index(drop=True)
+        elif sort_option == "Supplier":
+            df_to_display = df_to_display.sort_values(by='Supplier', kind='stable').reset_index(drop=True)
 
         df_with_calcs = _calculate_sell_prices(df_to_display)
 
@@ -280,7 +284,7 @@ if not st.session_state.quote_items.empty:
         if st.button("Generate Final Quote PDF", type="primary", use_container_width=True):
             final_df = st.session_state.quote_items.copy()
             if st.session_state.sort_by != "Manual Order":
-                 final_df = final_df.sort_values(by=st.session_state.sort_by, kind='stable').reset_index(drop=True)
+                 final_df = final_df.sort_values(by=st.session_state.sort_by.upper(), kind='stable').reset_index(drop=True)
 
             final_df_for_pdf = _calculate_sell_prices(final_df)
             
