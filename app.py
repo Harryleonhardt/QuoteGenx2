@@ -13,9 +13,22 @@ try:
 except ImportError:
     WEASYPRINT_AVAILABLE = False
 
+# --- Use your logo as the app icon ---
+logo_path = Path(__file__).parent / "AWM Logo (002).png"
+
+def get_logo_base64(file_path):
+    try:
+        with open(file_path, "rb") as img_file:
+            return base64.b64encode(img_file.read()).decode()
+    except FileNotFoundError:
+        return None
+
+company_logo_b64 = get_logo_base64(logo_path)
+page_icon = f"data:image/png;base64,{company_logo_b64}" if company_logo_b64 else "📄"
+
 st.set_page_config(
     page_title="AWM Quote Generator",
-    page_icon="📄",
+    page_icon=page_icon,
     layout="wide"
 )
 
@@ -68,10 +81,25 @@ st.markdown("""
         color: #334155;
         margin-bottom: 2rem;
     }
+    .awm-logo-header {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        margin-bottom: 0;
+    }
+    .awm-logo-header img {
+        height: 50px;
+    }
+    .awm-logo-header h1 {
+        font-size: 2.5rem;
+        margin-bottom: 0;
+        color: #1e293b;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- Helper Functions ---
 def file_to_generative_part(file):
     bytes_io = BytesIO(file.getvalue())
     return {"mime_type": file.type, "data": bytes_io.read()}
@@ -81,17 +109,6 @@ def image_to_base64(image_file):
         bytes_data = image_file.getvalue()
         return base64.b64encode(bytes_data).decode()
     return None
-
-def get_logo_base64(file_path):
-    try:
-        with open(file_path, "rb") as img_file:
-            return base64.b64encode(img_file.read()).decode()
-    except FileNotFoundError:
-        st.error(
-            "Logo file not found. Please ensure 'AWM Logo (002).png' is present.",
-            icon="🚨"
-        )
-        return None
 
 def format_currency(num):
     if pd.isna(num) or num is None:
@@ -149,14 +166,19 @@ if "project_summary" not in st.session_state:
 if "header_image_b64" not in st.session_state:
     st.session_state.header_image_b64 = None
 if "company_logo_b64" not in st.session_state:
-    logo_file_path = Path(__file__).parent / "AWM Logo (002).png"
-    st.session_state.company_logo_b64 = get_logo_base64(logo_file_path)
+    st.session_state.company_logo_b64 = company_logo_b64
 if "sort_by" not in st.session_state:
     st.session_state.sort_by = "Type"
 
 # --- MAIN LAYOUT ---
+
 with st.container():
-    st.title("📄 AWM Quote Generator")
+    st.markdown(
+        f'<div class="awm-logo-header">'
+        f'<img src="data:image/png;base64,{company_logo_b64}" alt="AWM Logo" />'
+        f'<h1>AWM Quote Generator</h1></div>',
+        unsafe_allow_html=True
+    )
     st.caption(
         f"App created by Harry Leonhardt | Quote prepared by: "
         f"**{st.session_state.user_details['name'] or 'Your Name'}**"
@@ -179,36 +201,49 @@ with st.container():
             st.text_input("Quote Number", value=st.session_state.quote_details['quoteNumber'], key="quoteNumber")
         with c3:
             global_margin = st.number_input("Global Margin (%)", value=9.0, min_value=0.0, max_value=99.9, step=1.0, format="%.2f", key="global_margin")
-            st.markdown(" ")
-            if st.form_submit_button("Apply Margin"):
-                if not st.session_state.quote_items.empty:
-                    st.session_state.quote_items['MARGIN'] = global_margin
-                    st.toast(f"Applied {global_margin}% margin to all items.")
-                    st.rerun()
-                else:
-                    st.warning("No items in the quote to apply margin to.")
-            st.markdown(" ")
-            if st.button("Clear All Items"):
-                st.session_state.quote_items = st.session_state.quote_items.iloc[0:0]
-                st.session_state.project_summary = ""
-                st.rerun()
+        # Two submit buttons
+        col_apply, col_clear = st.columns(2)
+        apply_margin = col_apply.form_submit_button("Apply Margin")
+        clear_all = col_clear.form_submit_button("Clear All Items")
         # Save details to session state
         for field in ["name", "job_title", "branch", "email", "phone"]:
             st.session_state.user_details[field] = st.session_state[field]
         for field in ["customerName", "attention", "projectName", "quoteNumber"]:
             st.session_state.quote_details[field] = st.session_state[field]
+
+    if apply_margin:
+        if not st.session_state.quote_items.empty:
+            st.session_state.quote_items['MARGIN'] = global_margin
+            st.toast(f"Applied {global_margin}% margin to all items.")
+            st.rerun()
+        else:
+            st.warning("No items in the quote to apply margin to.")
+
+    if clear_all:
+        st.session_state.quote_items = st.session_state.quote_items.iloc[0:0]
+        st.session_state.project_summary = ""
+        st.rerun()
+
     st.markdown("---")
 
-    # --- Drag-and-drop File Upload Section ---
+    # --- Drag-and-drop File Upload AND Paste-Text Section ---
     st.markdown('<div class="drag-drop-box">', unsafe_allow_html=True)
-    uploaded_files = st.file_uploader(
-        "Drag & drop PDF or TXT files here, or click to browse",
-        type=['pdf', 'txt'],
-        accept_multiple_files=True,
-        key="uploader"
-    )
+    up_col1, up_col2 = st.columns(2)
+    with up_col1:
+        uploaded_files = st.file_uploader(
+            "Drag & drop PDF or TXT files here, or click to browse",
+            type=['pdf', 'txt'],
+            accept_multiple_files=True,
+            key="uploader"
+        )
+    with up_col2:
+        pasted_text = st.text_area(
+            "Or paste supplier quote text here (one document at a time):",
+            height=180,
+            key="pasted_text"
+        )
     st.markdown('</div>', unsafe_allow_html=True)
-    process_button = st.button("Process Uploaded Files", use_container_width=True, disabled=not uploaded_files)
+    process_button = st.button("Process Uploaded/Pasted Files", use_container_width=True, disabled=not (uploaded_files or pasted_text.strip()))
 
     # --- Logo and Custom Header Section ---
     c_logo, c_head = st.columns([1, 2])
@@ -246,8 +281,8 @@ with st.container():
                     st.error(f"Failed to generate summary: {e}")
 
 # --- File Processing Logic ---
-if process_button and uploaded_files:
-    with st.spinner(f"Processing {len(uploaded_files)} file(s) with Gemini... This may take a moment."):
+if process_button and (uploaded_files or pasted_text.strip()):
+    with st.spinner(f"Processing {len(uploaded_files) if uploaded_files else 0} file(s) and pasted text with Gemini..."):
         all_new_items = []
         failed_files = []
         extraction_prompt = (
@@ -257,43 +292,71 @@ if process_button and uploaded_files:
             "Ensure QTY and COST_PER_UNIT are numbers. "
             "**Crucially, all string values in the JSON must be properly formatted. Any special characters like newlines or double quotes within a string must be correctly escaped (e.g., '\\n' for newlines, '\\\"' for quotes).**"
         )
-
         json_schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"}, "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}}, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]}}
         model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
 
-        for file in uploaded_files:
+        # process files
+        if uploaded_files:
+            for file in uploaded_files:
+                try:
+                    st.write(f"Processing `{file.name}`...")
+                    part = file_to_generative_part(file)
+                    response = model.generate_content([extraction_prompt, part])
+                    response_text = response.text
+                    extracted_data = None
+                    try:
+                        extracted_data = json.loads(response_text)
+                    except json.JSONDecodeError:
+                        st.write(f"Initial JSON parse failed for `{file.name}`. Attempting to clean response...")
+                        match = re.search(r'```json\s*(.*)\s*```', response_text, re.DOTALL)
+                        if match:
+                            json_str = match.group(1).strip()
+                            try:
+                                extracted_data = json.loads(json_str)
+                                st.write(f"Successfully cleaned and parsed JSON for `{file.name}`.")
+                            except json.JSONDecodeError as final_e:
+                                st.error(f"Failed to parse cleaned JSON for `{file.name}`. Error: {final_e}")
+                                failed_files.append(file.name)
+                                continue
+                        else:
+                            st.error(f"Error processing `{file.name}`: Could not find a valid JSON block in the API response.")
+                            failed_files.append(file.name)
+                            continue
+
+                    if extracted_data:
+                        all_new_items.extend(extracted_data)
+                except Exception as e:
+                    st.error(f"An unexpected error occurred processing `{file.name}`: {e}")
+                    failed_files.append(file.name)
+
+        # process pasted text
+        if pasted_text.strip():
             try:
-                st.write(f"Processing `{file.name}`...")
-                part = file_to_generative_part(file)
-                response = model.generate_content([extraction_prompt, part])
+                st.write("Processing pasted text...")
+                response = model.generate_content([extraction_prompt, pasted_text])
                 response_text = response.text
                 extracted_data = None
-
                 try:
                     extracted_data = json.loads(response_text)
                 except json.JSONDecodeError:
-                    st.write(f"Initial JSON parse failed for `{file.name}`. Attempting to clean response...")
+                    st.write(f"Initial JSON parse failed. Attempting to clean response...")
                     match = re.search(r'```json\s*(.*)\s*```', response_text, re.DOTALL)
                     if match:
                         json_str = match.group(1).strip()
                         try:
                             extracted_data = json.loads(json_str)
-                            st.write(f"Successfully cleaned and parsed JSON for `{file.name}`.")
+                            st.write(f"Successfully cleaned and parsed JSON for pasted text.")
                         except json.JSONDecodeError as final_e:
-                            st.error(f"Failed to parse cleaned JSON for `{file.name}`. Error: {final_e}")
-                            failed_files.append(file.name)
-                            continue
+                            st.error(f"Failed to parse cleaned JSON for pasted text. Error: {final_e}")
+                            failed_files.append("Pasted Text")
                     else:
-                        st.error(f"Error processing `{file.name}`: Could not find a valid JSON block in the API response.")
-                        failed_files.append(file.name)
-                        continue
-
+                        st.error("Error processing pasted text: Could not find a valid JSON block in the API response.")
+                        failed_files.append("Pasted Text")
                 if extracted_data:
                     all_new_items.extend(extracted_data)
-
             except Exception as e:
-                st.error(f"An unexpected error occurred processing `{file.name}`: {e}")
-                failed_files.append(file.name)
+                st.error(f"An unexpected error occurred processing pasted text: {e}")
+                failed_files.append("Pasted Text")
 
         if all_new_items:
             new_df = pd.DataFrame(all_new_items)
@@ -302,7 +365,7 @@ if process_button and uploaded_files:
             st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
             st.success(f"Successfully extracted {len(all_new_items)} items!")
         if failed_files:
-            st.warning(f"Could not process the following files: {', '.join(failed_files)}")
+            st.warning(f"Could not process the following: {', '.join(failed_files)}")
         st.rerun()
 
 # --- Main Table, Editing, and Actions ---
@@ -425,13 +488,11 @@ else:
         st.subheader("Review Details (edit above if needed)")
         submitted = st.form_submit_button("Generate Final Quote PDF", type="primary", use_container_width=True)
     if submitted:
-        # --- PDF Generation Logic (from your original app) ---
         final_df = st.session_state.quote_items.copy()
         if st.session_state.sort_by == 'Type':
             final_df = final_df.sort_values(by='TYPE').reset_index(drop=True)
         elif st.session_state.sort_by == 'Supplier':
             final_df = final_df.sort_values(by='Supplier').reset_index(drop=True)
-
         for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
             final_df[col] = pd.to_numeric(final_df[col], errors='coerce').fillna(0)
         final_cost_after_disc = final_df['COST_PER_UNIT'] * (1 - final_df['DISC'] / 100)
@@ -439,7 +500,6 @@ else:
         final_margin_divisor[final_margin_divisor <= 0] = 0.01
         final_df['SELL_UNIT_EX_GST'] = final_cost_after_disc / final_margin_divisor
         final_df['SELL_TOTAL_EX_GST'] = final_df['SELL_UNIT_EX_GST'] * final_df['QTY']
-
         items_html = ""
         for i, row in final_df.iterrows():
             product_details_html = f"""
@@ -459,24 +519,23 @@ else:
                 <td class="p-2 text-right align-top">{format_currency(row['SELL_TOTAL_EX_GST'])}</td>
             </tr>
             """
-
         q_details = st.session_state.quote_details
-        company_logo_html = ""
-        if st.session_state.company_logo_b64:
-            company_logo_html = f'<img src="data:image/png;base64,{st.session_state.company_logo_b64}" alt="Company Logo" class="h-16 mb-4">'
-        else:
-            company_logo_html = '<h1 class="text-3xl font-bold text-gray-800">Company Name</h1>'
-
+        company_logo_html = (
+            f'<img src="data:image/png;base64,{st.session_state.company_logo_b64}" alt="Company Logo" class="h-16 mb-4">'
+            if st.session_state.company_logo_b64
+            else '<h1 class="text-3xl font-bold text-gray-800">Company Name</h1>'
+        )
         header_image_html = ""
         if st.session_state.header_image_b64:
             header_image_html = f'<img src="data:image/png;base64,{st.session_state.header_image_b64}" alt="Custom Header" class="max-h-24 object-contain">'
-
         branch_address_html = ""
         if st.session_state.user_details['branch'] == "AWM Nunawading":
             branch_address_html = '<p class="text-sm text-gray-600">31-33 Rooks Road, Nunawading, 3131</p>'
-
         attention_html = f'<p class="text-gray-700"><strong class="font-bold text-gray-800">Attn:</strong> {q_details["attention"] or "N/A"}</p>'
-
+        # --- Grand Total calculation for PDF
+        pdf_subtotal = format_currency(df_for_totals['SELL_TOTAL_EX_GST'].sum())
+        pdf_gst = format_currency(df_for_totals['GST_AMOUNT'].sum())
+        pdf_grand_total = format_currency(df_for_totals['SELL_TOTAL_INC_GST'].sum())
         quote_html = f"""
         <!DOCTYPE html>
         <html lang="en">
@@ -526,9 +585,9 @@ else:
                 </main>
                 <footer class="mt-8 flex justify-end" style="page-break-inside: avoid;">
                     <div class="w-2/5">
-                        <div class="flex justify-between p-2 bg-gray-100 rounded-t-lg"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(df_for_totals['SELL_TOTAL_EX_GST'].sum())}</span></div>
-                        <div class="flex justify-between p-2"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{format_currency(df_for_totals['GST_AMOUNT'].sum())}</span></div>
-                        <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{format_currency(df_for_totals['SELL_TOTAL_INC_GST'].sum())}</span></div>
+                        <div class="flex justify-between p-2 bg-gray-100 rounded-t-lg"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{pdf_subtotal}</span></div>
+                        <div class="flex justify-between p-2"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{pdf_gst}</span></div>
+                        <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{pdf_grand_total}</span></div>
                     </div>
                 </footer>
                 <div class="mt-12 pt-8" style="page-break-inside: avoid;">
