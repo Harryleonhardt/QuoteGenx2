@@ -6,6 +6,7 @@ import pandas as pd
 import json
 import base64
 import re
+import time # --- NEW: Import the time module for delays ---
 from io import BytesIO
 from pathlib import Path
 # --- NEW: Import the WeasyPrint library ---
@@ -268,7 +269,9 @@ with st.sidebar:
 
 # --- File Processing Logic ---
 if process_button and uploaded_files:
-    with st.spinner(f"Processing {len(uploaded_files)} file(s) with Gemini... This may take a moment."):
+    # --- MODIFIED: Updated spinner text ---
+    spinner_text = f"Processing {len(uploaded_files)} file(s)... (Pausing between files to respect API limits)"
+    with st.spinner(spinner_text):
         all_new_items = []
         failed_files = []
         extraction_prompt = (
@@ -282,7 +285,7 @@ if process_button and uploaded_files:
         json_schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"}, "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}}, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]}}
         model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
 
-        for file in uploaded_files:
+        for i, file in enumerate(uploaded_files):
             try:
                 st.write(f"Processing `{file.name}`...")
                 part = file_to_generative_part(file)
@@ -311,6 +314,11 @@ if process_button and uploaded_files:
 
                 if extracted_data:
                     all_new_items.extend(extracted_data)
+                
+                # --- NEW: Add a delay after each API call, except for the last file ---
+                if i < len(uploaded_files) - 1:
+                    time.sleep(2)
+
 
             except Exception as e:
                 st.error(f"An unexpected error occurred processing `{file.name}`: {e}")
