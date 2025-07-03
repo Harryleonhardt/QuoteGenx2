@@ -137,14 +137,11 @@ except (FileNotFoundError, KeyError):
 if not check_password():
     st.stop()
 
-# Maintain row order and sort state in session
 if "quote_items" not in st.session_state:
     st.session_state.quote_items = pd.DataFrame(columns=[
         "TYPE", "QTY", "Supplier", "CAT_NO", "Description",
         "COST_PER_UNIT", "DISC", "MARGIN"
     ])
-if "row_order" not in st.session_state:
-    st.session_state.row_order = []
 if "user_details" not in st.session_state:
     st.session_state.user_details = {
         "name": "",
@@ -168,15 +165,7 @@ if "header_image_b64" not in st.session_state:
 if "company_logo_b64" not in st.session_state:
     st.session_state.company_logo_b64 = company_logo_b64
 if "sort_by" not in st.session_state:
-    st.session_state.sort_by = "Order"  # New default: always keep manual order unless user sorts
-
-def update_row_order():
-    # Reset or set row order to match quote_items if not set
-    if len(st.session_state.row_order) != len(st.session_state.quote_items):
-        st.session_state.row_order = list(range(len(st.session_state.quote_items)))
-
-def reorder_df(df, row_order):
-    return df.iloc[row_order].reset_index(drop=True)
+    st.session_state.sort_by = "Type"
 
 with st.container():
     st.markdown(
@@ -224,7 +213,6 @@ with st.container():
 
     if clear_all:
         st.session_state.quote_items = st.session_state.quote_items.iloc[0:0]
-        st.session_state.row_order = []
         st.session_state.project_summary = ""
         st.rerun()
 
@@ -377,8 +365,6 @@ if process_button and (uploaded_files or pasted_text.strip()):
             new_df['DISC'] = 0.0
             new_df['MARGIN'] = st.session_state.global_margin
             st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
-            update_row_order()
-            st.session_state.row_order.extend(list(range(len(st.session_state.row_order), len(st.session_state.quote_items))))
             st.success(f"Successfully extracted {len(all_new_items)} items!")
         if failed_files:
             st.warning(f"Could not process the following: {', '.join(failed_files)}")
@@ -399,34 +385,33 @@ else:
     st.subheader("Quote Line Items")
     sort_option = st.radio(
         "Sort items by:",
-        ("Manual Order", "Type", "Supplier"),
+        ("Type", "Supplier", "Manual Order"),
         horizontal=True,
         key="sort_by"
     )
 
-    update_row_order()
-
-    # Apply sorting for table display, but preserve row order if "Manual Order"
-    if sort_option == "Manual Order":
-        display_df = reorder_df(st.session_state.quote_items, st.session_state.row_order)
-    elif sort_option == "Type":
-        display_df = st.session_state.quote_items.sort_values(by='TYPE', kind="stable").reset_index(drop=True)
+    # Sorted DataFrame logic
+    if sort_option == "Type":
+        sorted_df = st.session_state.quote_items.sort_values(by='TYPE', kind='stable').reset_index(drop=True)
+        sort_key = 'TYPE'
     elif sort_option == "Supplier":
-        display_df = st.session_state.quote_items.sort_values(by='Supplier', kind="stable").reset_index(drop=True)
+        sorted_df = st.session_state.quote_items.sort_values(by='Supplier', kind='stable').reset_index(drop=True)
+        sort_key = 'Supplier'
     else:
-        display_df = reorder_df(st.session_state.quote_items, st.session_state.row_order)
+        sorted_df = st.session_state.quote_items.reset_index(drop=True)
+        sort_key = None
 
     st.caption("You can edit values directly in the table below. Calculations will update automatically.")
-    df_for_display = display_df.copy()
     for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
-        df_for_display[col] = pd.to_numeric(df_for_display[col], errors='coerce').fillna(0)
-    cost_after_disc = df_for_display['COST_PER_UNIT'] * (1 - df_for_display['DISC'] / 100)
-    margin_divisor = (1 - df_for_display['MARGIN'] / 100)
+        sorted_df[col] = pd.to_numeric(sorted_df[col], errors='coerce').fillna(0)
+    cost_after_disc = sorted_df['COST_PER_UNIT'] * (1 - sorted_df['DISC'] / 100)
+    margin_divisor = (1 - sorted_df['MARGIN'] / 100)
     margin_divisor[margin_divisor <= 0] = 0.01
-    df_for_display['SELL_UNIT_EX_GST'] = cost_after_disc / margin_divisor
-    df_for_display['SELL_TOTAL_EX_GST'] = df_for_display['SELL_UNIT_EX_GST'] * df_for_display['QTY']
+    sorted_df['SELL_UNIT_EX_GST'] = cost_after_disc / margin_divisor
+    sorted_df['SELL_TOTAL_EX_GST'] = sorted_df['SELL_UNIT_EX_GST'] * sorted_df['QTY']
+
     edited_df = st.data_editor(
-        df_for_display,
+        sorted_df,
         column_config={
             "COST_PER_UNIT": st.column_config.NumberColumn("Cost/Unit", format="$%.2f"),
             "DISC": st.column_config.NumberColumn("Disc %", format="%.1f%%"),
@@ -441,118 +426,144 @@ else:
         key="data_editor"
     )
 
-    # Update the underlying data and row order if table changes
-    if not display_df.equals(edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST'])):
-        st.session_state.quote_items = edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST']).reset_index(drop=True)
-        if sort_option == "Manual Order":
-            pass
+    # Save edits back to the session state
+    if not sorted_df.equals(edited_df):
+        if sort_key:
+            # Update the session DataFrame in the sorted order
+            sort_indices = st.session_state.quote_items.sort_values(by=sort_key, kind='stable').index.to_list()
+            for i, idx in enumerate(sort_indices):
+                for col in st.session_state.quote_items.columns:
+                    st.session_state.quote_items.at[idx, col] = edited_df.at[i, col]
         else:
-            st.session_state.row_order = list(range(len(st.session_state.quote_items)))
-        st.rerun()
+            st.session_state.quote_items = edited_df.copy()
+        # Don't rerun here
 
+    # Row Operations
     st.divider()
     st.subheader("Row Operations & Reordering")
-    # Always display in manual order for row operations
-    manual_df = reorder_df(st.session_state.quote_items, st.session_state.row_order)
-    row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in manual_df.iterrows()]
+    row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in edited_df.iterrows()]
     selected_row_str = st.selectbox("Select a row to modify or move:", options=row_options, index=None, placeholder="Choose a row...")
 
     if selected_row_str is not None:
-        selected_manual_pos = row_options.index(selected_row_str)
-        selected_df_idx = st.session_state.row_order[selected_manual_pos]
+        selected_pos = row_options.index(selected_row_str)
         c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1])
         if c1.button("Add Row Above", use_container_width=True, key="add_above"):
-            new_row = pd.DataFrame([{
-                "TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "",
-                "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": st.session_state.global_margin
-            }])
-            st.session_state.quote_items = pd.concat([
-                st.session_state.quote_items.iloc[:selected_df_idx],
-                new_row,
-                st.session_state.quote_items.iloc[selected_df_idx:]
-            ], ignore_index=True)
-            # The new row is inserted at selected_df_idx, so all subsequent indices in row_order need to be incremented
-            st.session_state.row_order = (
-                st.session_state.row_order[:selected_manual_pos] +
-                [selected_df_idx] +
-                [i + 1 if i >= selected_df_idx else i for i in st.session_state.row_order[selected_manual_pos:]]
-            )
+            new_row = pd.DataFrame([{col: "" if edited_df[col].dtype==object else 0 for col in st.session_state.quote_items.columns}])
+            new_row.at[0, 'QTY'] = 1
+            new_row.at[0, 'MARGIN'] = st.session_state.global_margin
+            updated = pd.concat([edited_df.iloc[:selected_pos], new_row, edited_df.iloc[selected_pos:]], ignore_index=True)
+            if sort_key:
+                sort_indices = st.session_state.quote_items.sort_values(by=sort_key, kind='stable').index.to_list()
+                for i, idx in enumerate(sort_indices):
+                    for col in st.session_state.quote_items.columns:
+                        st.session_state.quote_items.at[idx, col] = updated.iloc[i][col]
+                # Add row to the end, then re-sort
+                st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_row], ignore_index=True)
+                st.session_state.quote_items = st.session_state.quote_items.sort_values(by=sort_key, kind='stable').reset_index(drop=True)
+            else:
+                st.session_state.quote_items = updated
             st.rerun()
         if c2.button("Add Row Below", use_container_width=True, key="add_below"):
-            insert_at = selected_df_idx + 1
-            new_row = pd.DataFrame([{
-                "TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "",
-                "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": st.session_state.global_margin
-            }])
-            st.session_state.quote_items = pd.concat([
-                st.session_state.quote_items.iloc[:insert_at],
-                new_row,
-                st.session_state.quote_items.iloc[insert_at:]
-            ], ignore_index=True)
-            st.session_state.row_order = (
-                st.session_state.row_order[:selected_manual_pos + 1] +
-                [insert_at] +
-                [i + 1 if i >= insert_at else i for i in st.session_state.row_order[selected_manual_pos + 1:]]
-            )
+            new_row = pd.DataFrame([{col: "" if edited_df[col].dtype==object else 0 for col in st.session_state.quote_items.columns}])
+            new_row.at[0, 'QTY'] = 1
+            new_row.at[0, 'MARGIN'] = st.session_state.global_margin
+            updated = pd.concat([edited_df.iloc[:selected_pos + 1], new_row, edited_df.iloc[selected_pos + 1:]], ignore_index=True)
+            if sort_key:
+                sort_indices = st.session_state.quote_items.sort_values(by=sort_key, kind='stable').index.to_list()
+                for i, idx in enumerate(sort_indices):
+                    for col in st.session_state.quote_items.columns:
+                        st.session_state.quote_items.at[idx, col] = updated.iloc[i][col]
+                st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_row], ignore_index=True)
+                st.session_state.quote_items = st.session_state.quote_items.sort_values(by=sort_key, kind='stable').reset_index(drop=True)
+            else:
+                st.session_state.quote_items = updated
             st.rerun()
         if c3.button("Delete Selected Row", use_container_width=True, key="delete_row"):
-            st.session_state.quote_items = st.session_state.quote_items.drop(selected_df_idx).reset_index(drop=True)
-            st.session_state.row_order.pop(selected_manual_pos)
-            st.session_state.row_order = [i if i < selected_df_idx else i - 1 for i in st.session_state.row_order]
+            updated = edited_df.drop(edited_df.index[selected_pos]).reset_index(drop=True)
+            if sort_key:
+                sort_indices = st.session_state.quote_items.sort_values(by=sort_key, kind='stable').index.to_list()
+                keep_indices = [i for i in range(len(edited_df)) if i != selected_pos]
+                for new_i, idx in enumerate(sort_indices):
+                    if new_i < len(keep_indices):
+                        for col in st.session_state.quote_items.columns:
+                            st.session_state.quote_items.at[idx, col] = updated.iloc[new_i][col]
+                st.session_state.quote_items = st.session_state.quote_items.iloc[:-1]
+                st.session_state.quote_items = st.session_state.quote_items.sort_values(by=sort_key, kind='stable').reset_index(drop=True)
+            else:
+                st.session_state.quote_items = updated
             st.rerun()
         if c4.button("Move Up", use_container_width=True, key="move_up"):
-            if selected_manual_pos > 0:
-                ro = st.session_state.row_order
-                ro[selected_manual_pos - 1], ro[selected_manual_pos] = ro[selected_manual_pos], ro[selected_manual_pos - 1]
-                st.session_state.row_order = ro
+            if selected_pos > 0:
+                temp = edited_df.iloc[selected_pos - 1].copy()
+                edited_df.iloc[selected_pos - 1] = edited_df.iloc[selected_pos]
+                edited_df.iloc[selected_pos] = temp
+                if sort_key:
+                    sort_indices = st.session_state.quote_items.sort_values(by=sort_key, kind='stable').index.to_list()
+                    for i, idx in enumerate(sort_indices):
+                        for col in st.session_state.quote_items.columns:
+                            st.session_state.quote_items.at[idx, col] = edited_df.iloc[i][col]
+                    st.session_state.quote_items = st.session_state.quote_items.sort_values(by=sort_key, kind='stable').reset_index(drop=True)
+                else:
+                    st.session_state.quote_items = edited_df
                 st.rerun()
         if c5.button("Move Down", use_container_width=True, key="move_down"):
-            if selected_manual_pos < len(st.session_state.row_order) - 1:
-                ro = st.session_state.row_order
-                ro[selected_manual_pos + 1], ro[selected_manual_pos] = ro[selected_manual_pos], ro[selected_manual_pos + 1]
-                st.session_state.row_order = ro
+            if selected_pos < len(edited_df) - 1:
+                temp = edited_df.iloc[selected_pos + 1].copy()
+                edited_df.iloc[selected_pos + 1] = edited_df.iloc[selected_pos]
+                edited_df.iloc[selected_pos] = temp
+                if sort_key:
+                    sort_indices = st.session_state.quote_items.sort_values(by=sort_key, kind='stable').index.to_list()
+                    for i, idx in enumerate(sort_indices):
+                        for col in st.session_state.quote_items.columns:
+                            st.session_state.quote_items.at[idx, col] = edited_df.iloc[i][col]
+                    st.session_state.quote_items = st.session_state.quote_items.sort_values(by=sort_key, kind='stable').reset_index(drop=True)
+                else:
+                    st.session_state.quote_items = edited_df
                 st.rerun()
 
     st.divider()
     st.subheader("✍️ AI Description Summarizer")
     st.caption("Select an item to generate a shorter, more client-friendly description.")
-    summary_row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in reorder_df(st.session_state.quote_items, st.session_state.row_order).iterrows()]
+    summary_row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in edited_df.iterrows()]
     selected_item_str_for_summary = st.selectbox("Select Item to Summarize", options=summary_row_options, index=None, placeholder="Choose an item...", key="summary_selectbox")
     if st.button("Summarize Description", use_container_width=True, disabled=not selected_item_str_for_summary):
         selected_index = summary_row_options.index(selected_item_str_for_summary)
-        idx = st.session_state.row_order[selected_index]
-        original_description = st.session_state.quote_items.at[idx, 'Description']
+        original_description = edited_df.at[selected_index, 'Description']
         with st.spinner("🤖 Gemini is summarizing..."):
             try:
                 prompt = f"Summarize the following product description in one clear, concise sentence for a customer quote. Be professional and easy to understand.\n\nOriginal Description: '{original_description}'"
                 model = genai.GenerativeModel('gemini-1.5-flash')
                 response = model.generate_content(prompt)
-                st.session_state.quote_items.at[idx, 'Description'] = response.text.strip()
+                # Map back to session DataFrame
+                if sort_key:
+                    sort_indices = st.session_state.quote_items.sort_values(by=sort_key, kind='stable').index.to_list()
+                    st.session_state.quote_items.at[sort_indices[selected_index], 'Description'] = response.text.strip()
+                else:
+                    st.session_state.quote_items.at[selected_index, 'Description'] = response.text.strip()
                 st.toast("Description summarized!", icon="✅")
                 st.rerun()
             except Exception as e:
                 st.error(f"Failed to summarize: {e}")
 
-    # Totals for display, always based on actual manual row order
-    df_for_totals = reorder_df(st.session_state.quote_items, st.session_state.row_order).copy()
+    # Totals for display
     for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
-        df_for_totals[col] = pd.to_numeric(df_for_totals[col], errors='coerce').fillna(0)
-    cost_after_disc = df_for_totals['COST_PER_UNIT'] * (1 - df_for_totals['DISC'] / 100)
-    margin_divisor = (1 - df_for_totals['MARGIN'] / 100)
+        edited_df[col] = pd.to_numeric(edited_df[col], errors='coerce').fillna(0)
+    cost_after_disc = edited_df['COST_PER_UNIT'] * (1 - edited_df['DISC'] / 100)
+    margin_divisor = (1 - edited_df['MARGIN'] / 100)
     margin_divisor[margin_divisor <= 0] = 0.01
-    df_for_totals['SELL_UNIT_EX_GST'] = cost_after_disc / margin_divisor
-    df_for_totals['SELL_TOTAL_EX_GST'] = df_for_totals['SELL_UNIT_EX_GST'] * df_for_totals['QTY']
-    total_cost_pre_margin = (cost_after_disc * df_for_totals['QTY']).sum()
+    edited_df['SELL_UNIT_EX_GST'] = cost_after_disc / margin_divisor
+    edited_df['SELL_TOTAL_EX_GST'] = edited_df['SELL_UNIT_EX_GST'] * edited_df['QTY']
+    total_cost_pre_margin = (cost_after_disc * edited_df['QTY']).sum()
     gst_rate = 10
-    df_for_totals['GST_AMOUNT'] = df_for_totals['SELL_TOTAL_EX_GST'] * (gst_rate / 100)
-    df_for_totals['SELL_TOTAL_INC_GST'] = df_for_totals['SELL_TOTAL_EX_GST'] + df_for_totals['GST_AMOUNT']
+    edited_df['GST_AMOUNT'] = edited_df['SELL_TOTAL_EX_GST'] * (gst_rate / 100)
+    edited_df['SELL_TOTAL_INC_GST'] = edited_df['SELL_TOTAL_EX_GST'] + edited_df['GST_AMOUNT']
     st.divider()
     st.subheader("Quote Totals")
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Cost (Pre-Margin)", format_currency(total_cost_pre_margin))
-    col2.metric("Sub-Total (ex. GST)", format_currency(df_for_totals['SELL_TOTAL_EX_GST'].sum()))
-    col3.metric("GST (10%)", format_currency(df_for_totals['GST_AMOUNT'].sum()))
-    col4.metric("Grand Total (inc. GST)", format_currency(df_for_totals['SELL_TOTAL_INC_GST'].sum()))
+    col2.metric("Sub-Total (ex. GST)", format_currency(edited_df['SELL_TOTAL_EX_GST'].sum()))
+    col3.metric("GST (10%)", format_currency(edited_df['GST_AMOUNT'].sum()))
+    col4.metric("Grand Total (inc. GST)", format_currency(edited_df['SELL_TOTAL_INC_GST'].sum()))
 
     st.divider()
     st.header("Finalise and Generate Quote")
@@ -560,8 +571,8 @@ else:
         st.subheader("Review Details (edit above if needed)")
         submitted = st.form_submit_button("Generate Final Quote PDF", type="primary", use_container_width=True)
     if submitted:
-        # Always use manual order for PDF regardless of display sort
-        final_df = reorder_df(st.session_state.quote_items, st.session_state.row_order).copy()
+        # Use edited_df for PDF output
+        final_df = edited_df.copy()
         for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
             final_df[col] = pd.to_numeric(final_df[col], errors='coerce').fillna(0)
         final_cost_after_disc = final_df['COST_PER_UNIT'] * (1 - final_df['DISC'] / 100)
@@ -579,7 +590,6 @@ else:
 
         items_html = ""
         for i, row in final_df.iterrows():
-            # Only include fields that are for the client, never price, margin or discount
             product_details_html = f"""
             <td class="p-2 w-1/3 align-top">
                 <strong class="block text-xs font-bold">{row['CAT_NO']}</strong>
@@ -593,6 +603,8 @@ else:
                 <td class="p-2 align-top">{row['QTY']}</td>
                 <td class="p-2 align-top">{row['Supplier']}</td>
                 {product_details_html}
+                <td class="p-2 text-right align-top">{format_currency(row['SELL_UNIT_EX_GST'])}</td>
+                <td class="p-2 text-right align-top">{format_currency(row['SELL_TOTAL_EX_GST'])}</td>
             </tr>
             """
         q_details = st.session_state.quote_details
@@ -647,8 +659,13 @@ else:
                     <table class="w-full text-left text-sm" style="table-layout: auto;">
                         <thead class="bg-slate-800 text-white">
                             <tr>
-                                <th class="p-2 rounded-tl-lg">ITEM</th><th class="p-2">TYPE</th><th class="p-2">QTY</th><th class="p-2">BRAND</th>
+                                <th class="p-2 rounded-tl-lg">ITEM</th>
+                                <th class="p-2">TYPE</th>
+                                <th class="p-2">QTY</th>
+                                <th class="p-2">BRAND</th>
                                 <th class="p-2 w-1/3">PRODUCT DETAILS</th>
+                                <th class="p-2 text-right">UNIT EX GST</th>
+                                <th class="p-2 text-right rounded-tr-lg">TOTAL EX GST</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-gray-200">{items_html}</tbody>
@@ -658,6 +675,7 @@ else:
                     <div class="w-2/5">
                         <div class="flex justify-between p-2 bg-gray-100 rounded-t-lg"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{pdf_subtotal}</span></div>
                         <div class="flex justify-between p-2"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{pdf_gst}</span></div>
+                        <div class="flex justify-between p-2"><span class="font-bold text-gray-800">Grand Total (Inc GST):</span><span class="text-gray-800">{pdf_grand_total}</span></div>
                         <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{pdf_grand_total}</span></div>
                     </div>
                 </footer>
