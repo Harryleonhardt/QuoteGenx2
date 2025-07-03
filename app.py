@@ -491,24 +491,29 @@ else:
             submitted = st.form_submit_button("Generate Final Quote PDF", type="primary", use_container_width=True)
 
         if submitted:
-            # --- FIX: Perform calculations on the final DataFrame before generating HTML ---
+            # --- FIX: Consolidated DataFrame logic for PDF generation ---
+            # 1. Create a single, definitive DataFrame for the PDF
             final_df = st.session_state.quote_items.copy()
+
+            # 2. Sort it according to the user's selection
             if st.session_state.sort_by == 'Type':
                 final_df = final_df.sort_values(by='TYPE').reset_index(drop=True)
             elif st.session_state.sort_by == 'Supplier':
                 final_df = final_df.sort_values(by='Supplier').reset_index(drop=True)
             
-            # Ensure numeric types for calculation
+            # 3. Perform all necessary calculations on this single DataFrame
             for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
                 final_df[col] = pd.to_numeric(final_df[col], errors='coerce').fillna(0)
             
-            # Perform the same calculations as used for display
             final_cost_after_disc = final_df['COST_PER_UNIT'] * (1 - final_df['DISC'] / 100)
             final_margin_divisor = (1 - final_df['MARGIN'] / 100)
             final_margin_divisor[final_margin_divisor <= 0] = 0.01
             final_df['SELL_UNIT_EX_GST'] = final_cost_after_disc / final_margin_divisor
             final_df['SELL_TOTAL_EX_GST'] = final_df['SELL_UNIT_EX_GST'] * final_df['QTY']
+            final_df['GST_AMOUNT'] = final_df['SELL_TOTAL_EX_GST'] * (gst_rate / 100)
+            final_df['SELL_TOTAL_INC_GST'] = final_df['SELL_TOTAL_EX_GST'] + final_df['GST_AMOUNT']
 
+            # 4. Use this single, calculated DataFrame for both items and totals
             items_html = ""
             for i, row in final_df.iterrows():
                 product_details_html = f"""
@@ -594,9 +599,9 @@ else:
                     </main>
                     <footer class="mt-8 flex justify-end" style="page-break-inside: avoid;">
                         <div class="w-2/5">
-                            <div class="flex justify-between p-2 bg-gray-100 rounded-t-lg"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(df_for_totals['SELL_TOTAL_EX_GST'].sum())}</span></div>
-                            <div class="flex justify-between p-2"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{format_currency(df_for_totals['GST_AMOUNT'].sum())}</span></div>
-                            <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{format_currency(df_for_totals['SELL_TOTAL_INC_GST'].sum())}</span></div>
+                            <div class="flex justify-between p-2 bg-gray-100 rounded-t-lg"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(final_df['SELL_TOTAL_EX_GST'].sum())}</span></div>
+                            <div class="flex justify-between p-2"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{format_currency(final_df['GST_AMOUNT'].sum())}</span></div>
+                            <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{format_currency(final_df['SELL_TOTAL_INC_GST'].sum())}</span></div>
                         </div>
                     </footer>
                     <div class="mt-12 pt-8" style="page-break-inside: avoid;">
