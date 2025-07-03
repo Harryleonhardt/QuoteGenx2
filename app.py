@@ -273,6 +273,7 @@ if process_button and (uploaded_files or pasted_text.strip()):
     with st.spinner(f"Processing {len(uploaded_files) if uploaded_files else 0} file(s) and pasted text with Gemini..."):
         all_new_items = []
         failed_files = []
+
         extraction_prompt = (
             "From the provided document, extract all line items. For each item, extract: "
             "TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. "
@@ -283,6 +284,7 @@ if process_button and (uploaded_files or pasted_text.strip()):
         json_schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"}, "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}}, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]}}
         model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
 
+        # Process each file separately
         if uploaded_files:
             for file in uploaded_files:
                 try:
@@ -315,6 +317,7 @@ if process_button and (uploaded_files or pasted_text.strip()):
                     st.error(f"An unexpected error occurred processing `{file.name}`: {e}")
                     failed_files.append(file.name)
 
+        # Process pasted text separately
         if pasted_text.strip():
             try:
                 st.write("Processing pasted text...")
