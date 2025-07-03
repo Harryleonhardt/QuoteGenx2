@@ -377,7 +377,6 @@ if process_button and (uploaded_files or pasted_text.strip()):
             new_df['DISC'] = 0.0
             new_df['MARGIN'] = st.session_state.global_margin
             st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
-            # update row order to append new rows at end
             update_row_order()
             st.session_state.row_order.extend(list(range(len(st.session_state.row_order), len(st.session_state.quote_items))))
             st.success(f"Successfully extracted {len(all_new_items)} items!")
@@ -444,53 +443,74 @@ else:
 
     # Update the underlying data and row order if table changes
     if not display_df.equals(edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST'])):
-        # To keep row order correct after sorting or editing, always update quote_items to match the edited display
         st.session_state.quote_items = edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST']).reset_index(drop=True)
         if sort_option == "Manual Order":
-            # Keep the row_order as is
             pass
         else:
-            # If sorted by Type or Supplier, update row_order to match this new order
             st.session_state.row_order = list(range(len(st.session_state.quote_items)))
         st.rerun()
 
     st.divider()
     st.subheader("Row Operations & Reordering")
-    row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in reorder_df(st.session_state.quote_items, st.session_state.row_order).iterrows()]
+    # Always display in manual order for row operations
+    manual_df = reorder_df(st.session_state.quote_items, st.session_state.row_order)
+    row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in manual_df.iterrows()]
     selected_row_str = st.selectbox("Select a row to modify or move:", options=row_options, index=None, placeholder="Choose a row...")
 
-    if selected_row_str:
-        selected_index = row_options.index(selected_row_str)
+    if selected_row_str is not None:
+        selected_manual_pos = row_options.index(selected_row_str)
+        selected_df_idx = st.session_state.row_order[selected_manual_pos]
         c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1, 1])
         if c1.button("Add Row Above", use_container_width=True, key="add_above"):
-            new_row = pd.DataFrame([{"TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "", "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": st.session_state.global_margin}])
-            idx = st.session_state.row_order[selected_index]
-            updated_df = pd.concat([st.session_state.quote_items.iloc[:idx], new_row, st.session_state.quote_items.iloc[idx:]], ignore_index=True)
-            st.session_state.quote_items = updated_df
-            st.session_state.row_order.insert(selected_index, len(updated_df)-1)
+            new_row = pd.DataFrame([{
+                "TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "",
+                "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": st.session_state.global_margin
+            }])
+            st.session_state.quote_items = pd.concat([
+                st.session_state.quote_items.iloc[:selected_df_idx],
+                new_row,
+                st.session_state.quote_items.iloc[selected_df_idx:]
+            ], ignore_index=True)
+            # The new row is inserted at selected_df_idx, so all subsequent indices in row_order need to be incremented
+            st.session_state.row_order = (
+                st.session_state.row_order[:selected_manual_pos] +
+                [selected_df_idx] +
+                [i + 1 if i >= selected_df_idx else i for i in st.session_state.row_order[selected_manual_pos:]]
+            )
             st.rerun()
         if c2.button("Add Row Below", use_container_width=True, key="add_below"):
-            new_row = pd.DataFrame([{"TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "", "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": st.session_state.global_margin}])
-            idx = st.session_state.row_order[selected_index]
-            updated_df = pd.concat([st.session_state.quote_items.iloc[:idx+1], new_row, st.session_state.quote_items.iloc[idx+1:]], ignore_index=True)
-            st.session_state.quote_items = updated_df
-            st.session_state.row_order.insert(selected_index+1, len(updated_df)-1)
+            insert_at = selected_df_idx + 1
+            new_row = pd.DataFrame([{
+                "TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "",
+                "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": st.session_state.global_margin
+            }])
+            st.session_state.quote_items = pd.concat([
+                st.session_state.quote_items.iloc[:insert_at],
+                new_row,
+                st.session_state.quote_items.iloc[insert_at:]
+            ], ignore_index=True)
+            st.session_state.row_order = (
+                st.session_state.row_order[:selected_manual_pos + 1] +
+                [insert_at] +
+                [i + 1 if i >= insert_at else i for i in st.session_state.row_order[selected_manual_pos + 1:]]
+            )
             st.rerun()
         if c3.button("Delete Selected Row", use_container_width=True, key="delete_row"):
-            idx = st.session_state.row_order[selected_index]
-            updated_df = st.session_state.quote_items.drop(idx).reset_index(drop=True)
-            st.session_state.quote_items = updated_df
-            st.session_state.row_order.pop(selected_index)
-            # Re-map row_order to new df index (since drop resets index)
-            st.session_state.row_order = [i if i < idx else i-1 for i in st.session_state.row_order]
+            st.session_state.quote_items = st.session_state.quote_items.drop(selected_df_idx).reset_index(drop=True)
+            st.session_state.row_order.pop(selected_manual_pos)
+            st.session_state.row_order = [i if i < selected_df_idx else i - 1 for i in st.session_state.row_order]
             st.rerun()
         if c4.button("Move Up", use_container_width=True, key="move_up"):
-            if selected_index > 0:
-                st.session_state.row_order[selected_index-1], st.session_state.row_order[selected_index] = st.session_state.row_order[selected_index], st.session_state.row_order[selected_index-1]
+            if selected_manual_pos > 0:
+                ro = st.session_state.row_order
+                ro[selected_manual_pos - 1], ro[selected_manual_pos] = ro[selected_manual_pos], ro[selected_manual_pos - 1]
+                st.session_state.row_order = ro
                 st.rerun()
         if c5.button("Move Down", use_container_width=True, key="move_down"):
-            if selected_index < len(st.session_state.row_order)-1:
-                st.session_state.row_order[selected_index+1], st.session_state.row_order[selected_index] = st.session_state.row_order[selected_index], st.session_state.row_order[selected_index+1]
+            if selected_manual_pos < len(st.session_state.row_order) - 1:
+                ro = st.session_state.row_order
+                ro[selected_manual_pos + 1], ro[selected_manual_pos] = ro[selected_manual_pos], ro[selected_manual_pos + 1]
+                st.session_state.row_order = ro
                 st.rerun()
 
     st.divider()
