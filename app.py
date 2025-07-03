@@ -6,10 +6,9 @@ import pandas as pd
 import json
 import base64
 import re
-import time # --- NEW: Import the time module for delays ---
+import time 
 from io import BytesIO
 from pathlib import Path
-# --- NEW: Import the WeasyPrint library ---
 try:
     from weasyprint import HTML, CSS
     WEASYPRINT_AVAILABLE = True
@@ -129,6 +128,22 @@ def check_password():
 
     return False
 
+# --- NEW: Centralized Calculation Function ---
+def _calculate_sell_prices(df: pd.DataFrame) -> pd.DataFrame:
+    """Takes a dataframe and returns it with calculated sell prices."""
+    df_calc = df.copy()
+    for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
+        df_calc[col] = pd.to_numeric(df_calc[col], errors='coerce').fillna(0)
+    
+    cost_after_disc = df_calc['COST_PER_UNIT'] * (1 - df_calc['DISC'] / 100)
+    margin_divisor = (1 - df_calc['MARGIN'] / 100)
+    margin_divisor[margin_divisor <= 0] = 0.01 
+    
+    df_calc['SELL_UNIT_EX_GST'] = cost_after_disc / margin_divisor
+    df_calc['SELL_TOTAL_EX_GST'] = df_calc['SELL_UNIT_EX_GST'] * df_calc['QTY']
+    
+    return df_calc
+
 # --- Gemini API Configuration ---
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
@@ -179,7 +194,6 @@ if "company_logo_b64" not in st.session_state:
     logo_file_path = Path(__file__).parent / "AWM Logo (002).png"
     st.session_state.company_logo_b64 = get_logo_base64(logo_file_path)
 
-# --- NEW: Initialize sort order state ---
 if "sort_by" not in st.session_state:
     st.session_state.sort_by = "Type"
 
@@ -269,7 +283,6 @@ with st.sidebar:
 
 # --- File Processing Logic ---
 if process_button and uploaded_files:
-    # --- MODIFIED: Updated spinner text ---
     spinner_text = f"Processing {len(uploaded_files)} file(s)... (Pausing between files to respect API limits)"
     with st.spinner(spinner_text):
         all_new_items = []
@@ -315,10 +328,8 @@ if process_button and uploaded_files:
                 if extracted_data:
                     all_new_items.extend(extracted_data)
                 
-                # --- NEW: Add a delay after each API call, except for the last file ---
                 if i < len(uploaded_files) - 1:
                     time.sleep(2)
-
 
             except Exception as e:
                 st.error(f"An unexpected error occurred processing `{file.name}`: {e}")
@@ -351,7 +362,6 @@ else:
 
         st.subheader("Quote Line Items")
         
-        # --- NEW: Sorting Feature ---
         sort_option = st.radio(
             "Sort items by:",
             ("Type", "Supplier"),
@@ -359,25 +369,16 @@ else:
             key="sort_by"
         )
         
-        # Sort the DataFrame based on the selected option
         df_to_edit = st.session_state.quote_items.copy()
         if sort_option == 'Type':
-            df_to_edit = df_to_edit.sort_values(by='TYPE').reset_index(drop=True)
+            df_to_edit = df_to_edit.sort_values(by='TYPE', kind='mergesort').reset_index(drop=True)
         elif sort_option == 'Supplier':
-            df_to_edit = df_to_edit.sort_values(by='Supplier').reset_index(drop=True)
+            df_to_edit = df_to_edit.sort_values(by='Supplier', kind='mergesort').reset_index(drop=True)
         
         st.caption("You can edit values directly in the table below. Calculations will update automatically.")
         
-        df_for_display = df_to_edit.copy()
-        
-        for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
-            df_for_display[col] = pd.to_numeric(df_for_display[col], errors='coerce').fillna(0)
-            
-        cost_after_disc = df_for_display['COST_PER_UNIT'] * (1 - df_for_display['DISC'] / 100)
-        margin_divisor = (1 - df_for_display['MARGIN'] / 100)
-        margin_divisor[margin_divisor <= 0] = 0.01 
-        df_for_display['SELL_UNIT_EX_GST'] = cost_after_disc / margin_divisor
-        df_for_display['SELL_TOTAL_EX_GST'] = df_for_display['SELL_UNIT_EX_GST'] * df_for_display['QTY']
+        # --- FIX: Use the centralized calculation function ---
+        df_for_display = _calculate_sell_prices(df_to_edit)
         
         edited_df = st.data_editor(
             df_for_display,
@@ -402,7 +403,7 @@ else:
         st.divider()
         st.subheader("Row Operations")
         
-        row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in st.session_state.quote_items.iterrows()]
+        row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in df_to_edit.iterrows()]
         
         selected_row_str = st.selectbox("Select a row to modify:", options=row_options, index=None, placeholder="Choose a row...")
 
@@ -413,18 +414,18 @@ else:
             
             if c1.button("Add Row Above", use_container_width=True):
                 new_row = pd.DataFrame([{"TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "", "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": global_margin}])
-                updated_df = pd.concat([st.session_state.quote_items.iloc[:selected_index], new_row, st.session_state.quote_items.iloc[selected_index:]], ignore_index=True)
+                updated_df = pd.concat([df_to_edit.iloc[:selected_index], new_row, df_to_edit.iloc[selected_index:]], ignore_index=True)
                 st.session_state.quote_items = updated_df
                 st.rerun()
 
             if c2.button("Add Row Below", use_container_width=True):
                 new_row = pd.DataFrame([{"TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "", "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": global_margin}])
-                updated_df = pd.concat([st.session_state.quote_items.iloc[:selected_index+1], new_row, st.session_state.quote_items.iloc[selected_index+1:]], ignore_index=True)
+                updated_df = pd.concat([df_to_edit.iloc[:selected_index+1], new_row, df_to_edit.iloc[selected_index+1:]], ignore_index=True)
                 st.session_state.quote_items = updated_df
                 st.rerun()
 
             if c3.button("Delete Selected Row", use_container_width=True):
-                updated_df = st.session_state.quote_items.drop(st.session_state.quote_items.index[selected_index]).reset_index(drop=True)
+                updated_df = df_to_edit.drop(df_to_edit.index[selected_index]).reset_index(drop=True)
                 st.session_state.quote_items = updated_df
                 st.rerun()
 
@@ -450,17 +451,11 @@ else:
                 except Exception as e:
                     st.error(f"Failed to summarize: {e}")
 
-        df_for_totals = st.session_state.quote_items.copy()
-        for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
-            df_for_totals[col] = pd.to_numeric(df_for_totals[col], errors='coerce').fillna(0)
-
-        cost_after_disc = df_for_totals['COST_PER_UNIT'] * (1 - df_for_totals['DISC'] / 100)
-        margin_divisor = (1 - df_for_totals['MARGIN'] / 100)
-        margin_divisor[margin_divisor <= 0] = 0.01
-        df_for_totals['SELL_UNIT_EX_GST'] = cost_after_disc / margin_divisor
-        df_for_totals['SELL_TOTAL_EX_GST'] = df_for_totals['SELL_UNIT_EX_GST'] * df_for_totals['QTY']
+        # --- FIX: Use the centralized calculation function for totals ---
+        df_for_totals = _calculate_sell_prices(st.session_state.quote_items)
         
-        total_cost_pre_margin = (cost_after_disc * df_for_totals['QTY']).sum()
+        cost_after_disc_total = df_for_totals['COST_PER_UNIT'] * (1 - df_for_totals['DISC'] / 100)
+        total_cost_pre_margin = (cost_after_disc_total * df_for_totals['QTY']).sum()
         
         gst_rate = 10
         df_for_totals['GST_AMOUNT'] = df_for_totals['SELL_TOTAL_EX_GST'] * (gst_rate / 100)
@@ -468,7 +463,6 @@ else:
 
         st.divider()
         st.subheader("Quote Totals")
-        # --- NEW: Added Total Cost metric ---
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Total Cost (Pre-Margin)", format_currency(total_cost_pre_margin))
         col2.metric("Sub-Total (ex. GST)", format_currency(df_for_totals['SELL_TOTAL_EX_GST'].sum()))
@@ -491,29 +485,14 @@ else:
             submitted = st.form_submit_button("Generate Final Quote PDF", type="primary", use_container_width=True)
 
         if submitted:
-            # --- FIX: Consolidated DataFrame logic for PDF generation ---
-            # 1. Create a single, definitive DataFrame for the PDF
-            final_df = st.session_state.quote_items.copy()
-
-            # 2. Sort it according to the user's selection
+            # --- FIX: Use the centralized calculation function for the final PDF data ---
+            final_df = _calculate_sell_prices(st.session_state.quote_items)
+            
             if st.session_state.sort_by == 'Type':
-                final_df = final_df.sort_values(by='TYPE').reset_index(drop=True)
+                final_df = final_df.sort_values(by='TYPE', kind='mergesort').reset_index(drop=True)
             elif st.session_state.sort_by == 'Supplier':
-                final_df = final_df.sort_values(by='Supplier').reset_index(drop=True)
-            
-            # 3. Perform all necessary calculations on this single DataFrame
-            for col in ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']:
-                final_df[col] = pd.to_numeric(final_df[col], errors='coerce').fillna(0)
-            
-            final_cost_after_disc = final_df['COST_PER_UNIT'] * (1 - final_df['DISC'] / 100)
-            final_margin_divisor = (1 - final_df['MARGIN'] / 100)
-            final_margin_divisor[final_margin_divisor <= 0] = 0.01
-            final_df['SELL_UNIT_EX_GST'] = final_cost_after_disc / final_margin_divisor
-            final_df['SELL_TOTAL_EX_GST'] = final_df['SELL_UNIT_EX_GST'] * final_df['QTY']
-            final_df['GST_AMOUNT'] = final_df['SELL_TOTAL_EX_GST'] * (gst_rate / 100)
-            final_df['SELL_TOTAL_INC_GST'] = final_df['SELL_TOTAL_EX_GST'] + final_df['GST_AMOUNT']
+                final_df = final_df.sort_values(by='Supplier', kind='mergesort').reset_index(drop=True)
 
-            # 4. Use this single, calculated DataFrame for both items and totals
             items_html = ""
             for i, row in final_df.iterrows():
                 product_details_html = f"""
@@ -635,10 +614,12 @@ else:
                 tfoot {
                     display: table-footer-group;
                 }
-                /* MODIFIED: Removed page-break-inside: avoid from tr to prevent large gaps */
                 table {
                     width: 100%;
                     border-collapse: collapse;
+                }
+                tr {
+                    page-break-inside: avoid !important;
                 }
                 th, td {
                     text-align: left;
