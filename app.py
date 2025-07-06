@@ -425,11 +425,11 @@ if not st.session_state.quote_items.empty:
 
             submitted = st.form_submit_button("Generate Final Quote PDF", type="primary", use_container_width=True)
 
-if submitted:
+        if submitted:
             # --- PDF Generation Logic ---
             final_df = _calculate_sell_prices(st.session_state.quote_items)
             
-            # Add the missing GST and Total Inc GST calculations to the final DataFrame
+            # FIXED: Add the missing GST and Total Inc GST calculations to the final DataFrame
             final_df['GST_AMOUNT'] = final_df['SELL_TOTAL_EX_GST'] * (10 / 100)
             final_df['SELL_TOTAL_INC_GST'] = final_df['SELL_TOTAL_EX_GST'] + final_df['GST_AMOUNT']
 
@@ -437,8 +437,6 @@ if submitted:
                 final_df = final_df.sort_values(by='TYPE', kind='mergesort').reset_index(drop=True)
             elif st.session_state.sort_by == 'Supplier':
                 final_df = final_df.sort_values(by='Supplier', kind='mergesort').reset_index(drop=True)
-
-    final_df = final_df.sort_values(by='Supplier', kind='mergesort').reset_index(drop=True)
 
             items_html = ""
             for i, row in final_df.iterrows():
