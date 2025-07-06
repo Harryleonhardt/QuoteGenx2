@@ -31,7 +31,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- NEW: Modern, Pastel/Neutral App Styling ---
+# --- Modern, Pastel/Neutral App Styling ---
 st.markdown("""
 <style>
     /* --- Main App Styling --- */
@@ -55,7 +55,7 @@ st.markdown("""
         color: #343a40; /* Darker grey for titles */
     }
 
-    /* --- NEW: Pastel Button Styling --- */
+    /* --- Pastel Button Styling --- */
     .stButton > button {
         background-color: #a0c4ff; /* Pastel Blue */
         color: #002b6e !important; /* Darker blue text for contrast */
@@ -75,7 +75,7 @@ st.markdown("""
         opacity: 0.7;
     }
 
-    /* --- NEW: Special styling for the final "Generate" button --- */
+    /* --- Special styling for the final "Generate" button --- */
     .stButton > button[kind="primary"] {
         background-color: #a7d7c5; /* Pastel Green */
         border-color: #a7d7c5;
@@ -209,7 +209,7 @@ if "sort_by" not in st.session_state:
 
 # --- Main Application UI ---
 
-# --- MODIFIED: Header with logo and title side-by-side ---
+# --- Header with logo and title side-by-side ---
 col1, col2 = st.columns([1, 4])
 with col1:
     if st.session_state.company_logo_b64:
@@ -416,7 +416,10 @@ if not st.session_state.quote_items.empty:
             # --- Quote Totals ---
             st.header("Step 4: Review Totals & Generate PDF")
             df_for_totals = _calculate_sell_prices(st.session_state.quote_items)
-            cost_after_disc_total = (df_for_totals['COST_PER_UNIT'] * (1 - df_for_totals['DISC'] / 100) * df_for_totals['QTY']).sum()
+            
+            # FIXED: Corrected the variable name here from 'cost_after_disc_total'
+            total_cost_pre_margin = (df_for_totals['COST_PER_UNIT'] * (1 - df_for_totals['DISC'] / 100) * df_for_totals['QTY']).sum()
+            
             gst_rate = 10
             df_for_totals['GST_AMOUNT'] = df_for_totals['SELL_TOTAL_EX_GST'] * (gst_rate / 100)
             df_for_totals['SELL_TOTAL_INC_GST'] = df_for_totals['SELL_TOTAL_EX_GST'] + df_for_totals['GST_AMOUNT']
