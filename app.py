@@ -252,3 +252,305 @@ if process_button and uploaded_files:
         model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
 
         for i, file in enumerate(uploaded_files):
+            try:
+                st.write(f"Processing `{file.name}`...")
+                part = file_to_generative_part(file)
+                response = model.generate_content([extraction_prompt, part])
+                extracted_data = json.loads(response.text)
+                if extracted_data:
+                    all_new_items.extend(extracted_data)
+                if i < len(uploaded_files) - 1:
+                    time.sleep(2)
+            except Exception as e:
+                st.error(f"An error occurred processing `{file.name}`: {e}")
+                failed_files.append(file.name)
+
+        if all_new_items:
+            new_df = pd.DataFrame(all_new_items)
+            new_df['DISC'] = 0.0
+            new_df['MARGIN'] = 9.0 # Default global margin
+            st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
+            st.success(f"Successfully extracted {len(all_new_items)} items!")
+        if failed_files:
+            st.warning(f"Could not process the following files: {', '.join(failed_files)}")
+        st.rerun()
+
+
+# --- Main Content Area (Post-Upload) ---
+if not WEASYPRINT_AVAILABLE:
+     st.error("PDF generation library not found. Please ensure `weasyprint` is in your requirements.txt and the system packages are in `packages.txt`.", icon="🚨")
+     st.stop()
+
+if not st.session_state.quote_items.empty:
+    # --- STEP 2: Edit and Refine Quote ---
+    with st.container():
+        st.markdown('<div class="step-container">', unsafe_allow_html=True)
+        st.header("Step 2: Edit & Refine Quote")
+        st.caption("You can edit values directly in the table. Calculations will update automatically.")
+
+        df_to_edit = st.session_state.quote_items.copy()
+        df_for_display = _calculate_sell_prices(df_to_edit)
+
+        edited_df = st.data_editor(
+            df_for_display,
+            column_config={
+                "COST_PER_UNIT": st.column_config.NumberColumn("Cost/Unit", format="$%.2f"),
+                "DISC": st.column_config.NumberColumn("Disc %", format="%.1f%%"),
+                "MARGIN": st.column_config.NumberColumn("Margin %", format="%.1f%%", min_value=0, max_value=99.9),
+                "Description": st.column_config.TextColumn("Description", width="large"),
+                "SELL_UNIT_EX_GST": st.column_config.NumberColumn("Unit Price Ex GST", help="= (Cost * (1-Disc)) / (1-Margin)", format="$%.2f", disabled=True),
+                "SELL_TOTAL_EX_GST": st.column_config.NumberColumn("Line Price Ex GST", help="= Unit Price Ex GST * QTY", format="$%.2f", disabled=True),
+            },
+            column_order=["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT", "DISC", "MARGIN", "SELL_UNIT_EX_GST", "SELL_TOTAL_EX_GST"],
+            num_rows="dynamic",
+            use_container_width=True,
+            key="data_editor"
+        )
+
+        if not df_to_edit.equals(edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST'])):
+            st.session_state.quote_items = edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST']).reset_index(drop=True)
+            st.rerun()
+
+        st.divider()
+
+        # --- Sub-section for Table Controls ---
+        st.subheader("Table Controls")
+        c1, c2 = st.columns(2)
+
+        with c1:
+            st.write("**Sorting**")
+            st.radio( "Sort items by:",("Type", "Supplier"), horizontal=True, key="sort_by", label_visibility="collapsed")
+            if st.session_state.sort_by == 'Type':
+                df_to_edit = df_to_edit.sort_values(by='TYPE', kind='mergesort').reset_index(drop=True)
+            elif st.session_state.sort_by == 'Supplier':
+                df_to_edit = df_to_edit.sort_values(by='Supplier', kind='mergesort').reset_index(drop=True)
+
+        with c2:
+            st.write("**Global Margin**")
+            sub_c1, sub_c2 = st.columns([0.5, 0.5])
+            global_margin = sub_c1.number_input("Global Margin (%)", value=9.0, min_value=0.0, max_value=99.9, step=1.0, format="%.2f", label_visibility="collapsed")
+            if sub_c2.button("Apply Margin", use_container_width=True):
+                st.session_state.quote_items['MARGIN'] = global_margin
+                st.toast(f"Applied {global_margin}% margin to all items.")
+                st.rerun()
+
+        st.divider()
+        st.subheader("Row Operations")
+        row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in df_to_edit.iterrows()]
+        selected_row_str = st.selectbox("Select a row to modify:", options=row_options, index=None, placeholder="Choose a row...")
+        if selected_row_str:
+            selected_index = row_options.index(selected_row_str)
+            c1, c2, c3 = st.columns(3)
+            if c1.button("Add Row Above", use_container_width=True):
+                new_row = pd.DataFrame([{"TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "", "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": global_margin}])
+                updated_df = pd.concat([df_to_edit.iloc[:selected_index], new_row, df_to_edit.iloc[selected_index:]], ignore_index=True)
+                st.session_state.quote_items = updated_df
+                st.rerun()
+            if c2.button("Add Row Below", use_container_width=True):
+                new_row = pd.DataFrame([{"TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "", "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": global_margin}])
+                updated_df = pd.concat([df_to_edit.iloc[:selected_index+1], new_row, df_to_edit.iloc[selected_index+1:]], ignore_index=True)
+                st.session_state.quote_items = updated_df
+                st.rerun()
+            if c3.button("Delete Selected Row", use_container_width=True):
+                updated_df = df_to_edit.drop(df_to_edit.index[selected_index]).reset_index(drop=True)
+                st.session_state.quote_items = updated_df
+                st.rerun()
+
+        st.divider()
+        st.subheader("✍️ AI Description Summarizer")
+        st.caption("Select an item to generate a shorter, more client-friendly description.")
+        selected_item_str_for_summary = st.selectbox("Select Item to Summarize", options=row_options, index=None, placeholder="Choose an item...", key="summary_selectbox")
+        if st.button("Summarize Description", use_container_width=True, disabled=not selected_item_str_for_summary):
+            selected_index = row_options.index(selected_item_str_for_summary)
+            original_description = st.session_state.quote_items.at[selected_index, 'Description']
+            with st.spinner("🤖 Gemini is summarizing..."):
+                try:
+                    prompt = f"Summarize the following product description in one clear, concise sentence for a customer quote. Be professional and easy to understand.\n\nOriginal Description: '{original_description}'"
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    response = model.generate_content(prompt)
+                    st.session_state.quote_items.at[selected_index, 'Description'] = response.text.strip()
+                    st.toast("Description summarized!", icon="✅")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to summarize: {e}")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+    # --- STEP 3 & 4: Details and Final PDF Generation ---
+    with st.container():
+        st.markdown('<div class="step-container">', unsafe_allow_html=True)
+        with st.form("quote_details_form"):
+            st.header("Step 3: Project & Customer Details")
+
+            # --- Your Details ---
+            st.subheader("Your Details")
+            with st.expander("Edit Your Details", expanded=False):
+                st.session_state.user_details['name'] = st.text_input("Your Name", value=st.session_state.user_details['name'])
+                st.session_state.user_details['job_title'] = st.text_input("Job Title", value=st.session_state.user_details['job_title'])
+                st.session_state.user_details['branch'] = st.text_input("Branch", value=st.session_state.user_details['branch'])
+                st.session_state.user_details['email'] = st.text_input("Your Email", value=st.session_state.user_details['email'])
+                st.session_state.user_details['phone'] = st.text_input("Your Phone", value=st.session_state.user_details['phone'])
+
+            # --- Customer Details ---
+            st.subheader("Customer & Project Details")
+            q_details = st.session_state.quote_details
+            c1, c2 = st.columns(2)
+            q_details['customerName'] = c1.text_input("Customer Name", value=q_details['customerName'])
+            q_details['attention'] = c2.text_input("Attention", value=q_details['attention'])
+            q_details['projectName'] = c1.text_input("Project Name", value=q_details['projectName'])
+            q_details['quoteNumber'] = c2.text_input("Quote Number", value=q_details['quoteNumber'])
+
+            customer_logo = st.file_uploader(
+                "Upload Customer Logo (Optional)", type=['png', 'jpg', 'jpeg'],
+                help="Optional: Upload a logo for the customer to appear on the quote."
+            )
+            if customer_logo:
+                st.session_state.customer_logo_b64 = image_to_base64(customer_logo)
+                st.image(customer_logo, caption="Customer logo preview", width=150)
+
+            st.divider()
+
+            # --- Quote Totals ---
+            st.header("Step 4: Review Totals & Generate PDF")
+            df_for_totals = _calculate_sell_prices(st.session_state.quote_items)
+
+            total_cost_pre_margin = (df_for_totals['COST_PER_UNIT'] * (1 - df_for_totals['DISC'] / 100) * df_for_totals['QTY']).sum()
+
+            gst_rate = 10
+            df_for_totals['GST_AMOUNT'] = df_for_totals['SELL_TOTAL_EX_GST'] * (gst_rate / 100)
+            df_for_totals['SELL_TOTAL_INC_GST'] = df_for_totals['SELL_TOTAL_EX_GST'] + df_for_totals['GST_AMOUNT']
+
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Total Cost (Pre-Margin)", format_currency(total_cost_pre_margin))
+            col2.metric("Sub-Total (ex. GST)", format_currency(df_for_totals['SELL_TOTAL_EX_GST'].sum()))
+            col3.metric("GST (10%)", format_currency(df_for_totals['GST_AMOUNT'].sum()))
+            col4.metric("Grand Total (inc. GST)", format_currency(df_for_totals['SELL_TOTAL_INC_GST'].sum()))
+
+            submitted = st.form_submit_button("Generate Final Quote PDF", type="primary", use_container_width=True)
+
+        if submitted:
+            # --- PDF Generation Logic ---
+            final_df = _calculate_sell_prices(st.session_state.quote_items)
+
+            final_df['GST_AMOUNT'] = final_df['SELL_TOTAL_EX_GST'] * (10 / 100)
+            final_df['SELL_TOTAL_INC_GST'] = final_df['SELL_TOTAL_EX_GST'] + final_df['GST_AMOUNT']
+
+            # REMOVED: Unnecessary calculation for the PDF
+            # cost_after_disc_total_final = (final_df['COST_PER_UNIT'] * (1 - final_df['DISC'] / 100) * final_df['QTY']).sum()
+
+            if st.session_state.sort_by == 'Type':
+                final_df = final_df.sort_values(by='TYPE', kind='mergesort').reset_index(drop=True)
+            elif st.session_state.sort_by == 'Supplier':
+                final_df = final_df.sort_values(by='Supplier', kind='mergesort').reset_index(drop=True)
+
+            items_html = ""
+            for i, row in final_df.iterrows():
+                items_html += f"""
+                <tr class="border-b border-gray-200">
+                    <td class="p-2 align-top">{i + 1}</td>
+                    <td class="p-2 align-top">{row['TYPE']}</td>
+                    <td class="p-2 align-top">{row['QTY']}</td>
+                    <td class="p-2 align-top">{row['Supplier']}</td>
+                    <td class="p-2 w-1/3 align-top">
+                        <strong class="block text-xs font-bold">{row['CAT_NO']}</strong>
+                        <span>{row['Description']}</span>
+                    </td>
+                    <td class="p-2 text-right align-top">{format_currency(row['SELL_UNIT_EX_GST'])}</td>
+                    <td class="p-2 text-right align-top">{format_currency(row['SELL_TOTAL_EX_GST'])}</td>
+                </tr>"""
+
+            company_logo_html = f'<img src="data:image/png;base64,{st.session_state.company_logo_b64}" alt="Company Logo" class="h-16 mb-4">' if st.session_state.company_logo_b64 else ''
+            customer_logo_html = f'<img src="data:image/png;base64,{st.session_state.customer_logo_b64}" alt="Customer Logo" class="max-h-24 object-contain">' if st.session_state.customer_logo_b64 else ''
+            branch_address_html = '<p class="text-sm text-gray-600">31-33 Rooks Road, Nunawading, 3131</p>' if st.session_state.user_details['branch'] == "AWM Nunawading" else ''
+            attention_html = f'<p class="text-gray-700"><strong class="font-bold text-gray-800">Attn:</strong> {q_details["attention"] or "N/A"}</p>'
+
+            quote_html = f"""
+            <!DOCTYPE html><html lang="en">
+            <head><meta charset="UTF-8"><title>Quote {q_details['quoteNumber']}</title><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet"></head>
+            <body>
+                <div class="bg-white">
+                    <header class="flex justify-between items-start mb-8 border-b border-gray-300 pb-8">
+                        <div>
+                            {company_logo_html}
+                            <h1 class="text-2xl font-bold text-gray-800">{st.session_state.user_details['branch']}</h1>
+                            {branch_address_html}
+                            <p class="text-sm text-gray-600">A Division of Metal Manufactures Limited (A.B.N. 13 003 762 641)</p>
+                        </div>
+                        <div class="text-right">
+                            {customer_logo_html}
+                            <h2 class="text-3xl font-bold text-gray-700 mt-4">QUOTATION</h2>
+                        </div>
+                    </header>
+                    <section class="grid grid-cols-2 gap-6 mb-8">
+                        <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                            <h2 class="font-bold text-gray-800 mb-2">QUOTE TO:</h2>
+                            <p class="text-gray-700">{q_details['customerName']}</p>
+                            {attention_html}
+                        </div>
+                        <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                            <p class="text-gray-700"><strong class="font-bold text-gray-800">PROJECT:</strong> {q_details['projectName']}</p>
+                            <p class="text-gray-700"><strong class="font-bold text-gray-800">QUOTE #:</strong> {q_details['quoteNumber']}</p>
+                            <p class="text-gray-700"><strong class="font-bold text-gray-800">DATE:</strong> {q_details['date']}</p>
+                        </div>
+                    </section>
+                    <main>
+                        <table class="w-full text-left text-sm" style="table-layout: auto;">
+                            <thead class="bg-slate-800 text-white"><tr>
+                                <th class="p-2 rounded-tl-lg">ITEM</th><th class="p-2">TYPE</th><th class="p-2">QTY</th><th class="p-2">BRAND</th>
+                                <th class="p-2 w-1/3">PRODUCT DETAILS</th>
+                                <th class="p-2 text-right">UNIT EX GST</th><th class="p-2 text-right rounded-tr-lg">TOTAL EX GST</th>
+                            </tr></thead>
+                            <tbody class="divide-y divide-gray-200">{items_html}</tbody>
+                        </table>
+                    </main>
+                    <footer class="mt-8 flex justify-end" style="page-break-inside: avoid;">
+                        <div class="w-2/5">
+                            <div class="flex justify-between p-2 bg-gray-100"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(final_df['SELL_TOTAL_EX_GST'].sum())}</span></div>
+                            <div class="flex justify-between p-2"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{format_currency(final_df['GST_AMOUNT'].sum())}</span></div>
+                            <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{format_currency(final_df['SELL_TOTAL_INC_GST'].sum())}</span></div>
+                        </div>
+                    </footer>
+                    <div class="mt-12 pt-8" style="page-break-inside: avoid;">
+                        <h3 class="font-bold text-gray-800">Prepared For You By:</h3>
+                        <p class="text-gray-700 mt-2">{st.session_state.user_details['name']}</p>
+                        <p class="text-gray-600 text-sm">{st.session_state.user_details['job_title']}</p>
+                        <p class="text-gray-600 text-sm">{st.session_state.user_details['branch']}</p>
+                        <p class="mt-2 text-sm"><strong>Email:</strong> {st.session_state.user_details['email']}</p>
+                        <p class="text-sm"><strong>Phone:</strong> {st.session_state.user_details['phone']}</p>
+                    </div>
+                    <div class="mt-12 text-xs text-gray-500 border-t border-gray-300 pt-4" style="page-break-inside: avoid;">
+                        <h3 class="font-bold mb-2">CONDITIONS:</h3>
+                        <p>This offer is valid for 30 days. All goods are sold under MMEM's Terms and Conditions of Sale. Any changes in applicable taxes (GST) or tariffs which may occur will be to your account.</p>
+                    </div>
+                </div>
+            </body></html>
+            """
+
+            pdf_css = """/* PDF-specific CSS, same as before */
+            @page { size: A4; margin: 1.5cm; }
+            body { font-family: 'Inter', sans-serif; }
+            thead { display: table-header-group; }
+            tfoot { display: table-footer-group; }
+            table { width: 100%; border-collapse: collapse; }
+            tr { page-break-inside: avoid !important; }
+            th, td { text-align: left; padding: 4px 6px; vertical-align: top; }
+            th { background-color: #1e293b; color: white; }
+            td.text-right, th.text-right { text-align: right; }
+            """
+            combined_css = [
+                CSS(string='@import url("https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css");'),
+                CSS(string=pdf_css)
+            ]
+
+            pdf_bytes = HTML(string=quote_html).write_pdf(stylesheets=combined_css)
+
+            st.download_button(
+                label="✅ Download Final Quote as PDF",
+                data=pdf_bytes,
+                file_name=f"Quote_{q_details['quoteNumber']}_{q_details['customerName']}.pdf",
+                mime='application/pdf',
+                use_container_width=True
+            )
+
+        st.markdown('</div>', unsafe_allow_html=True)
