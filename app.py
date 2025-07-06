@@ -1,3 +1,5 @@
+# app.py
+
 import streamlit as st
 import google.generativeai as genai
 import pandas as pd
@@ -436,13 +438,15 @@ if not st.session_state.quote_items.empty:
             final_df['GST_AMOUNT'] = final_df['SELL_TOTAL_EX_GST'] * (10 / 100)
             final_df['SELL_TOTAL_INC_GST'] = final_df['SELL_TOTAL_EX_GST'] + final_df['GST_AMOUNT']
 
-            # REMOVED: Unnecessary calculation for the PDF
-            # cost_after_disc_total_final = (final_df['COST_PER_UNIT'] * (1 - final_df['DISC'] / 100) * final_df['QTY']).sum()
-
             if st.session_state.sort_by == 'Type':
                 final_df = final_df.sort_values(by='TYPE', kind='mergesort').reset_index(drop=True)
             elif st.session_state.sort_by == 'Supplier':
                 final_df = final_df.sort_values(by='Supplier', kind='mergesort').reset_index(drop=True)
+
+            # === NEW: Pre-calculating totals for clarity and to ensure correctness ===
+            sub_total = final_df['SELL_TOTAL_EX_GST'].sum()
+            gst_total = final_df['GST_AMOUNT'].sum()
+            grand_total = final_df['SELL_TOTAL_INC_GST'].sum()
 
             items_html = ""
             for i, row in final_df.iterrows():
@@ -506,9 +510,9 @@ if not st.session_state.quote_items.empty:
                     </main>
                     <footer class="mt-8 flex justify-end" style="page-break-inside: avoid;">
                         <div class="w-2/5">
-                            <div class="flex justify-between p-2 bg-gray-100"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(final_df['SELL_TOTAL_EX_GST'].sum())}</span></div>
-                            <div class="flex justify-between p-2"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{format_currency(final_df['GST_AMOUNT'].sum())}</span></div>
-                            <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{format_currency(final_df['SELL_TOTAL_INC_GST'].sum())}</span></div>
+                            <div class="flex justify-between p-2 bg-gray-100"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(sub_total)}</span></div>
+                            <div class="flex justify-between p-2"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{format_currency(gst_total)}</span></div>
+                            <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{format_currency(grand_total)}</span></div>
                         </div>
                     </footer>
                     <div class="mt-12 pt-8" style="page-break-inside: avoid;">
