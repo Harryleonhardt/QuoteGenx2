@@ -471,7 +471,7 @@ if not st.session_state.quote_items.empty:
             branch_address_html = '<p class="text-sm text-gray-600">31-33 Rooks Road, Nunawading, 3131</p>' if st.session_state.user_details['branch'] == "AWM Nunawading" else ''
             attention_html = f'<p class="text-gray-700"><strong class="font-bold text-gray-800">Attn:</strong> {q_details["attention"] or "N/A"}</p>'
 
-            # === MODIFIED: The HTML now uses the exact values saved in session_state ===
+            # --- UPDATED PDF HTML: Totals section now includes Grand Total (Inc GST) ---
             quote_html = f"""
             <!DOCTYPE html><html lang="en">
             <head><meta charset="UTF-8"><title>Quote {q_details['quoteNumber']}</title><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet"></head>
