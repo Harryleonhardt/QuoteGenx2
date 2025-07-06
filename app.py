@@ -471,7 +471,7 @@ if not st.session_state.quote_items.empty:
             branch_address_html = '<p class="text-sm text-gray-600">31-33 Rooks Road, Nunawading, 3131</p>' if st.session_state.user_details['branch'] == "AWM Nunawading" else ''
             attention_html = f'<p class="text-gray-700"><strong class="font-bold text-gray-800">Attn:</strong> {q_details["attention"] or "N/A"}</p>'
 
-            # === UPDATED HTML TEMPLATE WITH GRAND TOTAL SECTION ===
+            # === MODIFIED: The HTML now uses the exact values saved in session_state ===
             quote_html = f"""
             <!DOCTYPE html><html lang="en">
             <head><meta charset="UTF-8"><title>Quote {q_details['quoteNumber']}</title><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet"></head>
@@ -511,24 +511,13 @@ if not st.session_state.quote_items.empty:
                             <tbody class="divide-y divide-gray-200">{items_html}</tbody>
                         </table>
                     </main>
-                    
                     <footer class="mt-8 flex justify-end" style="page-break-inside: avoid;">
                         <div class="w-2/5">
-                            <div class="flex justify-between p-2 bg-gray-100 border-b border-gray-200">
-                                <span class="font-bold text-gray-800">Sub-Total (Ex GST):</span>
-                                <span class="text-gray-800">{format_currency(st.session_state.sub_total_for_pdf)}</span>
-                            </div>
-                            <div class="flex justify-between p-2 bg-gray-100 border-b border-gray-200">
-                                <span class="font-bold text-gray-800">GST (10%):</span>
-                                <span class="text-gray-800">{format_currency(st.session_state.gst_total_for_pdf)}</span>
-                            </div>
-                            <div class="flex justify-between p-3 bg-gray-200 rounded-b-lg">
-                                <span class="font-bold text-gray-900 text-lg">Grand Total (Inc GST):</span>
-                                <span class="font-bold text-gray-900 text-lg">{format_currency(st.session_state.grand_total_for_pdf)}</span>
-                            </div>
+                            <div class="flex justify-between p-2 bg-gray-100"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(st.session_state.sub_total_for_pdf)}</span></div>
+                            <div class="flex justify-between p-2"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{format_currency(st.session_state.gst_total_for_pdf)}</span></div>
+                            <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{format_currency(st.session_state.grand_total_for_pdf)}</span></div>
                         </div>
                     </footer>
-
                     <div class="mt-12 pt-8" style="page-break-inside: avoid;">
                         <h3 class="font-bold text-gray-800">Prepared For You By:</h3>
                         <p class="text-gray-700 mt-2">{st.session_state.user_details['name']}</p>
