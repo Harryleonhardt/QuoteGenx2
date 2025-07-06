@@ -31,7 +31,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- NEW: Modern, Neutral/Pastel App Styling ---
+# --- NEW: Modern, Pastel/Neutral App Styling ---
 st.markdown("""
 <style>
     /* --- Main App Styling --- */
@@ -55,34 +55,36 @@ st.markdown("""
         color: #343a40; /* Darker grey for titles */
     }
 
-    /* --- Button Styling --- */
+    /* --- NEW: Pastel Button Styling --- */
     .stButton > button {
-        background-color: #007bff; /* A modern, friendly blue */
-        color: white !important;
-        border: 1px solid #007bff !important;
+        background-color: #a0c4ff; /* Pastel Blue */
+        color: #002b6e !important; /* Darker blue text for contrast */
+        border: 1px solid #a0c4ff !important;
         border-radius: 0.375rem;
         font-weight: 600;
     }
     .stButton > button:hover {
-        background-color: #0056b3;
-        border-color: #0056b3;
-        color: white !important;
+        background-color: #8ab4f8; /* Slightly darker pastel blue on hover */
+        border-color: #8ab4f8;
+        color: #002b6e !important;
     }
     .stButton > button:disabled {
-        background-color: #6c757d !important;
-        color: white !important;
-        border-color: #6c757d !important;
-        opacity: 0.65;
+        background-color: #ced4da !important;
+        color: #6c757d !important;
+        border-color: #ced4da !important;
+        opacity: 0.7;
     }
 
-    /* --- Special styling for the final "Generate" button --- */
+    /* --- NEW: Special styling for the final "Generate" button --- */
     .stButton > button[kind="primary"] {
-        background-color: #28a745; /* Green for go! */
-        border-color: #28a745;
+        background-color: #a7d7c5; /* Pastel Green */
+        border-color: #a7d7c5;
+        color: #003e29 !important; /* Darker green text for contrast */
     }
     .stButton > button[kind="primary"]:hover {
-        background-color: #218838;
-        border-color: #218838;
+        background-color: #8abbac; /* Slightly darker pastel green on hover */
+        border-color: #8abbac;
+        color: #003e29 !important;
     }
 
     /* --- Styling for the file uploader --- */
@@ -207,11 +209,15 @@ if "sort_by" not in st.session_state:
 
 # --- Main Application UI ---
 
-# --- Header ---
-if st.session_state.company_logo_b64:
-    st.image(f"data:image/png;base64,{st.session_state.company_logo_b64}", width=200)
-st.title("AWM Quote Generator")
-st.caption(f"App created by Harry Leonhardt | Quote prepared by: **{st.session_state.user_details['name'] or 'Your Name'}**")
+# --- MODIFIED: Header with logo and title side-by-side ---
+col1, col2 = st.columns([1, 4])
+with col1:
+    if st.session_state.company_logo_b64:
+        st.image(f"data:image/png;base64,{st.session_state.company_logo_b64}", width=150)
+with col2:
+    st.title("AWM Quote Generator")
+    st.caption(f"App created by Harry Leonhardt | Quote prepared by: **{st.session_state.user_details['name'] or 'Your Name'}**")
+
 st.divider()
 
 # --- STEP 1: Upload Supplier Quotes ---
@@ -232,7 +238,6 @@ with st.container():
 
 # --- File Processing Logic ---
 if process_button and uploaded_files:
-    # (This logic remains largely the same)
     spinner_text = f"Processing {len(uploaded_files)} file(s)... (Pausing between files to respect API limits)"
     with st.spinner(spinner_text):
         all_new_items = []
@@ -411,8 +416,7 @@ if not st.session_state.quote_items.empty:
             # --- Quote Totals ---
             st.header("Step 4: Review Totals & Generate PDF")
             df_for_totals = _calculate_sell_prices(st.session_state.quote_items)
-            cost_after_disc_total = df_for_totals['COST_PER_UNIT'] * (1 - df_for_totals['DISC'] / 100)
-            total_cost_pre_margin = (cost_after_disc_total * df_for_totals['QTY']).sum()
+            cost_after_disc_total = (df_for_totals['COST_PER_UNIT'] * (1 - df_for_totals['DISC'] / 100) * df_for_totals['QTY']).sum()
             gst_rate = 10
             df_for_totals['GST_AMOUNT'] = df_for_totals['SELL_TOTAL_EX_GST'] * (gst_rate / 100)
             df_for_totals['SELL_TOTAL_INC_GST'] = df_for_totals['SELL_TOTAL_EX_GST'] + df_for_totals['GST_AMOUNT']
@@ -429,9 +433,11 @@ if not st.session_state.quote_items.empty:
             # --- PDF Generation Logic ---
             final_df = _calculate_sell_prices(st.session_state.quote_items)
             
-            # FIXED: Add the missing GST and Total Inc GST calculations to the final DataFrame
             final_df['GST_AMOUNT'] = final_df['SELL_TOTAL_EX_GST'] * (10 / 100)
             final_df['SELL_TOTAL_INC_GST'] = final_df['SELL_TOTAL_EX_GST'] + final_df['GST_AMOUNT']
+            
+            cost_after_disc_total_final = (final_df['COST_PER_UNIT'] * (1 - final_df['DISC'] / 100) * final_df['QTY']).sum()
+
 
             if st.session_state.sort_by == 'Type':
                 final_df = final_df.sort_values(by='TYPE', kind='mergesort').reset_index(drop=True)
@@ -500,7 +506,8 @@ if not st.session_state.quote_items.empty:
                     </main>
                     <footer class="mt-8 flex justify-end" style="page-break-inside: avoid;">
                         <div class="w-2/5">
-                            <div class="flex justify-between p-2 bg-gray-100 rounded-t-lg"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(final_df['SELL_TOTAL_EX_GST'].sum())}</span></div>
+                            <div class="flex justify-between p-2"><span class="font-bold text-gray-800">Total Cost (Pre-Margin):</span><span class="text-gray-800">{format_currency(cost_after_disc_total_final)}</span></div>
+                            <div class="flex justify-between p-2 bg-gray-100"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(final_df['SELL_TOTAL_EX_GST'].sum())}</span></div>
                             <div class="flex justify-between p-2"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{format_currency(final_df['GST_AMOUNT'].sum())}</span></div>
                             <div class="flex justify-between p-4 bg-slate-800 text-white font-bold text-lg rounded-b-lg"><span>Grand Total (Inc GST):</span><span>{format_currency(final_df['SELL_TOTAL_INC_GST'].sum())}</span></div>
                         </div>
