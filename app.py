@@ -49,10 +49,7 @@ db = init_firestore_client()
 
 @firestore.transactional
 def get_next_quote_number_transaction(transaction, counter_ref):
-    """
-    Atomically increments the quote number counter in a transaction.
-    This prevents race conditions where two users might get the same number.
-    """
+    """Atomically increments the quote number counter in a transaction."""
     snapshot = counter_ref.get(transaction=transaction)
     current_number = snapshot.get("current_number")
     new_number = current_number + 1
@@ -180,79 +177,85 @@ with st.container(border=True):
     if db is None:
         st.warning("Firestore is not connected. Dashboard is disabled.")
     else:
-        c1, c2 = st.columns([0.7, 0.3])
-        c1.info(f"Working on Quote ID: **{st.session_state.active_quote_id}**")
-        if c2.button("✨ Start New Blank Quote", use_container_width=True):
-            clear_current_quote()
-            st.rerun()
+        # --- NEW: Diagnostic Try/Except Block ---
+        try:
+            c1, c2 = st.columns([0.7, 0.3])
+            c1.info(f"Working on Quote ID: **{st.session_state.active_quote_id}**")
+            if c2.button("✨ Start New Blank Quote", use_container_width=True):
+                clear_current_quote()
+                st.rerun()
 
-        st.subheader("📖 All Quotes")
-        
-        search_term = st.text_input("Search Quotes (by #, Customer, or Project)", key="search_quotes", placeholder="Type here to search...")
+            st.subheader("📖 All Quotes")
+            
+            search_term = st.text_input("Search Quotes (by #, Customer, or Project)", key="search_quotes", placeholder="Type here to search...")
 
-        all_quotes = load_collection("quotes")
-        
-        if search_term:
-            search_term_lower = search_term.lower()
-            filtered_quotes = [
-                q for q in all_quotes 
-                if search_term_lower in q.get('quote_details', {}).get('quoteNumber', '').lower() or
-                   search_term_lower in q.get('quote_details', {}).get('customerName', '').lower() or
-                   search_term_lower in q.get('quote_details', {}).get('projectName', '').lower()
-            ]
-        else:
-            filtered_quotes = all_quotes
+            all_quotes = load_collection("quotes")
+            
+            if search_term:
+                search_term_lower = search_term.lower()
+                filtered_quotes = [
+                    q for q in all_quotes 
+                    if search_term_lower in q.get('quote_details', {}).get('quoteNumber', '').lower() or
+                       search_term_lower in q.get('quote_details', {}).get('customerName', '').lower() or
+                       search_term_lower in q.get('quote_details', {}).get('projectName', '').lower()
+                ]
+            else:
+                filtered_quotes = all_quotes
 
-        if not filtered_quotes:
-            st.info("No quotes found matching your search.")
-        else:
-            # --- FIXED: Robust sorting key ---
-            def get_sort_key(quote):
-                quote_num_str = quote.get('quote_details', {}).get('quoteNumber', 'Q0').replace('Q','')
-                try:
-                    return int(quote_num_str)
-                except (ValueError, TypeError):
-                    return 0 # Default to 0 if conversion fails
+            if not filtered_quotes:
+                st.info("No quotes found matching your search.")
+            else:
+                def get_sort_key(quote):
+                    quote_num_str = quote.get('quote_details', {}).get('quoteNumber', 'Q0').replace('Q','')
+                    try:
+                        return int(quote_num_str)
+                    except (ValueError, TypeError):
+                        return 0
 
-            sorted_quotes = sorted(filtered_quotes, key=get_sort_key, reverse=True)
+                sorted_quotes = sorted(filtered_quotes, key=get_sort_key, reverse=True)
 
-            for quote in sorted_quotes:
-                details = quote.get('quote_details', {})
-                status = quote.get('status', 'N/A')
-                color = "green" if status == "Finalized" else "orange"
-                with st.expander(f"**{details.get('quoteNumber', 'N/A')}** | Customer: **{details.get('customerName', 'N/A')}** | Status: :{color}[{status}]"):
-                    st.write(f"**Project:** {details.get('projectName', 'N/A')}")
-                    st.write(f"**Prepared By:** {quote.get('user_details', {}).get('name', 'N/A')}")
-                    st.write(f"**Date:** {details.get('date', 'N/A')}")
-                    
-                    c1, c2, c3 = st.columns([1, 1, 1])
-                    if c1.button("Load", key=f"load_{quote['id']}", use_container_width=True):
-                        st.session_state.quote_details = quote['quote_details']
-                        st.session_state.user_details = quote['user_details']
-                        st.session_state.quote_items = pd.DataFrame.from_records(quote['quote_items'])
-                        st.session_state.active_quote_id = quote['id']
-                        st.rerun()
-                    
-                    if c2.button("Duplicate", key=f"dup_{quote['id']}", use_container_width=True):
-                        new_quote_number = get_next_quote_number()
-                        new_quote_data = {
-                            "user_details": quote.get('user_details', {}),
-                            "quote_items": pd.DataFrame.from_records(quote.get('quote_items', [])),
-                            "quote_details": {
-                                "customerName": details.get('customerName', ''),
-                                "attention": details.get('attention', ''),
-                                "projectName": f"{details.get('projectName', '')} (Copy)",
-                                "quoteNumber": new_quote_number,
-                                "date": pd.Timestamp.now().strftime('%d/%m/%Y')
+                for quote in sorted_quotes:
+                    details = quote.get('quote_details', {})
+                    status = quote.get('status', 'N/A')
+                    color = "green" if status == "Finalized" else "orange"
+                    with st.expander(f"**{details.get('quoteNumber', 'N/A')}** | Customer: **{details.get('customerName', 'N/A')}** | Status: :{color}[{status}]"):
+                        st.write(f"**Project:** {details.get('projectName', 'N/A')}")
+                        st.write(f"**Prepared By:** {quote.get('user_details', {}).get('name', 'N/A')}")
+                        st.write(f"**Date:** {details.get('date', 'N/A')}")
+                        
+                        c1, c2, c3 = st.columns([1, 1, 1])
+                        if c1.button("Load", key=f"load_{quote['id']}", use_container_width=True):
+                            st.session_state.quote_details = quote['quote_details']
+                            st.session_state.user_details = quote['user_details']
+                            st.session_state.quote_items = pd.DataFrame.from_records(quote['quote_items'])
+                            st.session_state.active_quote_id = quote['id']
+                            st.rerun()
+                        
+                        if c2.button("Duplicate", key=f"dup_{quote['id']}", use_container_width=True):
+                            new_quote_number = get_next_quote_number()
+                            new_quote_data = {
+                                "user_details": quote.get('user_details', {}),
+                                "quote_items": pd.DataFrame.from_records(quote.get('quote_items', [])),
+                                "quote_details": {
+                                    "customerName": details.get('customerName', ''),
+                                    "attention": details.get('attention', ''),
+                                    "projectName": f"{details.get('projectName', '')} (Copy)",
+                                    "quoteNumber": new_quote_number,
+                                    "date": pd.Timestamp.now().strftime('%d/%m/%Y')
+                                }
                             }
-                        }
-                        save_document("quotes", new_quote_number, new_quote_data)
-                        st.toast(f"Duplicated as new quote {new_quote_number}", icon="✨")
-                        time.sleep(1); st.rerun()
+                            save_document("quotes", new_quote_number, new_quote_data)
+                            st.toast(f"Duplicated as new quote {new_quote_number}", icon="✨")
+                            time.sleep(1); st.rerun()
 
-                    if c3.button("Delete", key=f"del_{quote['id']}", use_container_width=True, type="secondary"):
-                        delete_quote_from_firestore(quote['id'])
-                        st.toast(f"Deleted {quote['id']}", icon="🗑️"); st.rerun()
+                        if c3.button("Delete", key=f"del_{quote['id']}", use_container_width=True, type="secondary"):
+                            delete_quote_from_firestore(quote['id'])
+                            st.toast(f"Deleted {quote['id']}", icon="🗑️"); st.rerun()
+        
+        except Exception as e:
+            st.error("An error occurred while rendering the dashboard. This might be due to a malformed quote in the database.", icon="🚨")
+            st.exception(e) # This will print the full technical error details.
+
 
 # --- STEP 1: Upload ---
 with st.container(border=True):
@@ -300,6 +303,7 @@ if not st.session_state.quote_items.empty:
         c1, c2 = st.columns(2)
         with c1:
             st.subheader("👤 Your Details")
+            # Using a unique key for the selectbox to avoid conflicts
             selected_user_name = st.selectbox("Select Your Name", options=user_names, index=0, key="user_selector")
             if selected_user_name == "<New User>":
                 st.session_state.user_details['name'] = st.text_input("Your Name", key="new_user_name")
@@ -308,8 +312,11 @@ if not st.session_state.quote_items.empty:
                 st.session_state.user_details['email'] = st.text_input("Your Email", key="new_user_email")
                 st.session_state.user_details['phone'] = st.text_input("Your Phone", "03 8846 2500", key="new_user_phone")
                 if st.button("Save New User"):
-                    save_document("users", st.session_state.user_details['name'], st.session_state.user_details)
-                    st.toast("User saved!"); time.sleep(1); st.rerun()
+                    if st.session_state.user_details['name']:
+                        save_document("users", st.session_state.user_details['name'], st.session_state.user_details)
+                        st.toast("User saved!"); time.sleep(1); st.rerun()
+                    else:
+                        st.warning("User name cannot be empty.")
             else:
                 user_data = next((u for u in users if u['name'] == selected_user_name), None)
                 if user_data: st.session_state.user_details = user_data
@@ -323,9 +330,12 @@ if not st.session_state.quote_items.empty:
                 customer_logo_file = st.file_uploader("Upload Customer Logo", type=['png', 'jpg', 'jpeg'])
                 if customer_logo_file: st.session_state.customer_logo_b64 = image_to_base64(customer_logo_file)
                 if st.button("Save New Customer"):
-                    new_customer_data = {'customerName': q_details['customerName'], 'logo_b64': st.session_state.customer_logo_b64}
-                    save_document("customers", q_details['customerName'], new_customer_data)
-                    st.toast("Customer saved!"); time.sleep(1); st.rerun()
+                    if q_details['customerName']:
+                        new_customer_data = {'customerName': q_details['customerName'], 'logo_b64': st.session_state.customer_logo_b64}
+                        save_document("customers", q_details['customerName'], new_customer_data)
+                        st.toast("Customer saved!"); time.sleep(1); st.rerun()
+                    else:
+                        st.warning("Customer Name cannot be empty.")
             else:
                 customer_data = next((c for c in customers if c['customerName'] == selected_customer_name), None)
                 if customer_data:
