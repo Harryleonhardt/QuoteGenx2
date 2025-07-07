@@ -1,3 +1,5 @@
+# app.py
+
 import streamlit as st
 import google.generativeai as genai
 import pandas as pd
@@ -61,13 +63,17 @@ def get_next_quote_number():
     """Gets the next sequential quote number from Firestore."""
     if db is None: return f"Q-Error-{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}"
     counter_ref = db.collection("counters").document("quote_counter")
-    transaction = db.transaction()
-    return get_next_quote_number_transaction(transaction, counter_ref)
+    try:
+        transaction = db.transaction()
+        return get_next_quote_number_transaction(transaction, counter_ref)
+    except Exception as e:
+        st.error(f"Could not get next quote number. Check 'counters' collection in Firestore. Error: {e}")
+        return f"Q-Error-{pd.Timestamp.now().strftime('%Y%m%d%H%M%S')}"
+
 
 def save_document(collection, doc_id, data):
     """Generic function to save a document to a collection."""
     if db is None: return
-    # Ensure DataFrame is converted to list of dicts before saving
     if 'quote_items' in data and isinstance(data['quote_items'], pd.DataFrame):
         data['quote_items'] = data['quote_items'].to_dict('records')
     db.collection(collection).document(doc_id).set(data, merge=True)
@@ -162,7 +168,6 @@ if 'sort_by' not in st.session_state: st.session_state.sort_by = "Type"
 # --- Main Application UI ---
 col1, col2 = st.columns([1, 4]);
 if st.session_state.company_logo_b64:
-    # FIXED: Explicitly create a data URI to prevent misinterpretation by st.image
     logo_data_uri = f"data:image/png;base64,{st.session_state.company_logo_b64}"
     col1.image(logo_data_uri, width=150)
 col2.title("AWM Quote Generator")
@@ -201,7 +206,15 @@ with st.container(border=True):
         if not filtered_quotes:
             st.info("No quotes found matching your search.")
         else:
-            sorted_quotes = sorted(filtered_quotes, key=lambda q: int(q.get('quote_details', {}).get('quoteNumber', 'Q0').replace('Q','')), reverse=True)
+            # --- FIXED: Robust sorting key ---
+            def get_sort_key(quote):
+                quote_num_str = quote.get('quote_details', {}).get('quoteNumber', 'Q0').replace('Q','')
+                try:
+                    return int(quote_num_str)
+                except (ValueError, TypeError):
+                    return 0 # Default to 0 if conversion fails
+
+            sorted_quotes = sorted(filtered_quotes, key=get_sort_key, reverse=True)
 
             for quote in sorted_quotes:
                 details = quote.get('quote_details', {})
