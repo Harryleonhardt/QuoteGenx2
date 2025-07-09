@@ -159,6 +159,15 @@ def _calculate_sell_prices(df: pd.DataFrame) -> pd.DataFrame:
 
     return df_calc
 
+def apply_sorting():
+    """Sorts the quote_items dataframe based on the sort_by session state."""
+    sort_key = st.session_state.sort_by
+    if sort_key in st.session_state.quote_items.columns:
+        st.session_state.quote_items = st.session_state.quote_items.sort_values(
+            by=sort_key,
+            kind='mergesort' # mergesort is stable
+        ).reset_index(drop=True)
+
 
 # --- Gemini API Configuration ---
 try:
@@ -278,6 +287,7 @@ if process_button and uploaded_files:
             new_df['DISC'] = 0.0
             new_df['MARGIN'] = 9.0 # Default global margin
             st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
+            apply_sorting() # Apply initial sort
             st.success(f"Successfully extracted {len(all_new_items)} items!")
         if failed_files:
             st.warning(f"Could not process the following files: {', '.join(failed_files)}")
@@ -315,9 +325,11 @@ if not st.session_state.quote_items.empty:
             key="data_editor"
         )
 
-        if not df_to_edit.equals(edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST'])):
-            st.session_state.quote_items = edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST']).reset_index(drop=True)
-            st.rerun()
+        # ✅ FIX 1: The stable way to process st.data_editor changes.
+        # This replaces the old `if not df_to_edit.equals(...)` block.
+        # It assigns the edited data back to session state. Streamlit's execution
+        # model handles the rerun automatically when the user edits a cell.
+        st.session_state.quote_items = edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST']).reset_index(drop=True)
 
         st.divider()
 
@@ -326,12 +338,17 @@ if not st.session_state.quote_items.empty:
         c1, c2 = st.columns(2)
 
         with c1:
+            # ✅ FIX 2: Using on_change for reliable, persistent sorting.
             st.write("**Sorting**")
-            st.radio( "Sort items by:",("Type", "Supplier"), horizontal=True, key="sort_by", label_visibility="collapsed")
-            if st.session_state.sort_by == 'Type':
-                df_to_edit = df_to_edit.sort_values(by='TYPE', kind='mergesort').reset_index(drop=True)
-            elif st.session_state.sort_by == 'Supplier':
-                df_to_edit = df_to_edit.sort_values(by='Supplier', kind='mergesort').reset_index(drop=True)
+            st.radio(
+                "Sort items by:",
+                ("Type", "Supplier"),
+                horizontal=True,
+                key="sort_by",
+                label_visibility="collapsed",
+                on_change=apply_sorting # This callback handles the logic
+            )
+            # The old if/elif block for sorting is no longer needed and has been removed.
 
         with c2:
             st.write("**Global Margin**")
@@ -344,23 +361,26 @@ if not st.session_state.quote_items.empty:
 
         st.divider()
         st.subheader("Row Operations")
-        row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in df_to_edit.iterrows()]
+        # Use the already edited and sorted dataframe for row operations
+        current_df_for_ops = st.session_state.quote_items
+        row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in current_df_for_ops.iterrows()]
         selected_row_str = st.selectbox("Select a row to modify:", options=row_options, index=None, placeholder="Choose a row...")
+        
         if selected_row_str:
             selected_index = row_options.index(selected_row_str)
             c1, c2, c3 = st.columns(3)
             if c1.button("Add Row Above", use_container_width=True):
                 new_row = pd.DataFrame([{"TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "", "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": global_margin}])
-                updated_df = pd.concat([df_to_edit.iloc[:selected_index], new_row, df_to_edit.iloc[selected_index:]], ignore_index=True)
+                updated_df = pd.concat([current_df_for_ops.iloc[:selected_index], new_row, current_df_for_ops.iloc[selected_index:]], ignore_index=True)
                 st.session_state.quote_items = updated_df
                 st.rerun()
             if c2.button("Add Row Below", use_container_width=True):
                 new_row = pd.DataFrame([{"TYPE": "", "QTY": 1, "Supplier": "", "CAT_NO": "", "Description": "", "COST_PER_UNIT": 0.0, "DISC": 0.0, "MARGIN": global_margin}])
-                updated_df = pd.concat([df_to_edit.iloc[:selected_index+1], new_row, df_to_edit.iloc[selected_index+1:]], ignore_index=True)
+                updated_df = pd.concat([current_df_for_ops.iloc[:selected_index+1], new_row, current_df_for_ops.iloc[selected_index+1:]], ignore_index=True)
                 st.session_state.quote_items = updated_df
                 st.rerun()
             if c3.button("Delete Selected Row", use_container_width=True):
-                updated_df = df_to_edit.drop(df_to_edit.index[selected_index]).reset_index(drop=True)
+                updated_df = current_df_for_ops.drop(current_df_for_ops.index[selected_index]).reset_index(drop=True)
                 st.session_state.quote_items = updated_df
                 st.rerun()
 
@@ -443,12 +463,8 @@ if not st.session_state.quote_items.empty:
 
         if submitted:
             # --- PDF Generation Logic ---
+            # Final dataframe for PDF is the one from session state, which is already sorted
             final_df = _calculate_sell_prices(st.session_state.quote_items)
-
-            if st.session_state.sort_by == 'Type':
-                final_df = final_df.sort_values(by='TYPE', kind='mergesort').reset_index(drop=True)
-            elif st.session_state.sort_by == 'Supplier':
-                final_df = final_df.sort_values(by='Supplier', kind='mergesort').reset_index(drop=True)
             
             items_html = ""
             for i, row in final_df.iterrows():
