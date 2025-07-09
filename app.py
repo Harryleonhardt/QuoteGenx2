@@ -172,22 +172,20 @@ if st.session_state.processing_triggered:
                 "**Crucially, all string values in the JSON must be properly formatted. Any special characters like newlines or double quotes within a string must be correctly escaped (e.g., '\\n' for newlines, '\\\"' for quotes).**"
             )
 
-            # ✅ FIX: The schema for the items in the array is now correctly nested.
+            # ✅ FIX: The "schema" key has been removed to fix the ValueError.
             json_schema = {
                 "type": "ARRAY",
                 "items": {
                     "type": "OBJECT",
-                    "schema": {
-                        "properties": {
-                            "TYPE": {"type": "STRING"},
-                            "QTY": {"type": "NUMBER"},
-                            "Supplier": {"type": "STRING"},
-                            "CAT_NO": {"type": "STRING"},
-                            "Description": {"type": "STRING"},
-                            "COST_PER_UNIT": {"type": "NUMBER"}
-                        },
-                        "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]
-                    }
+                    "properties": {
+                        "TYPE": {"type": "STRING"},
+                        "QTY": {"type": "NUMBER"},
+                        "Supplier": {"type": "STRING"},
+                        "CAT_NO": {"type": "STRING"},
+                        "Description": {"type": "STRING"},
+                        "COST_PER_UNIT": {"type": "NUMBER"}
+                    },
+                    "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]
                 }
             }
             
@@ -344,13 +342,11 @@ if not st.session_state.quote_items.empty:
         with st.form("quote_details_form"):
             st.header("Customer & Project Details")
             
+            # This uploader is inside the form and will only process on form submission.
+            # This is a known Streamlit behavior. For immediate feedback, it should be outside the form.
+            # We will handle the processing after the form submission.
             customer_profile_zip = st.file_uploader("Upload Customer Profile (.zip)", type="zip", key="customer_zip", help="Upload a .zip with customer details and logo.")
-            if customer_profile_zip:
-                # ... This logic needs to be outside the form to work immediately ...
-                pass # This is a placeholder as immediate processing inside a form is tricky.
-                 # The best practice is to have this uploader outside the form.
-                 # For now, we leave it here as a non-functional placeholder until the next revision.
-
+            
             q_details = st.session_state.quote_details
             c1, c2 = st.columns(2)
             q_details['customerName'] = c1.text_input("Customer Name", value=q_details.get('customerName', ''))
