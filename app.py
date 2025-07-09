@@ -35,6 +35,7 @@ st.set_page_config(
 st.markdown("""
 <style>
     .stApp { background-color: #f8f9fa; font-family: 'Inter', sans-serif; }
+    /* Reduces top padding */
     .st-emotion-cache-1y4p8pa { padding-top: 2rem; }
     h1, h2, h3 { color: #343a40; }
     .stButton > button { background-color: #a0c4ff; color: #002b6e !important; border: 1px solid #a0c4ff !important; border-radius: 0.375rem; font-weight: 600; }
@@ -153,8 +154,14 @@ if "processing_triggered" not in st.session_state:
     st.session_state.processing_triggered = False
 
 # --- Main App UI ---
-st.title("AWM Quote Generator")
-st.caption(f"Quote prepared by: **{st.session_state.user_details.get('name', 'Your Name')}**")
+# ✅ UI CHANGE: Logo and Title are now on the same line.
+col1, col2 = st.columns([1, 4], vertical_alignment="center")
+if st.session_state.company_logo_b64:
+    col1.image(st.session_state.company_logo_b64, width=150)
+col2.title("AWM Quote Generator")
+
+# ✅ UI CHANGE: Subheading updated.
+st.caption("App created by Harry Leonhardt")
 st.divider()
 
 # --- Main Processing Block ---
@@ -164,8 +171,7 @@ if st.session_state.processing_triggered:
     uploaded_files = st.session_state.get('file_uploader_state', [])
     if uploaded_files:
         with st.spinner(f"Processing {len(uploaded_files)} file(s)..."):
-            all_new_items = []
-            failed_files = []
+            all_new_items, failed_files = [], []
             extraction_prompt = (
                 "From the provided document, extract all line items. For each item, extract: "
                 "TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. "
@@ -238,7 +244,7 @@ with st.container(border=True):
             try:
                 st.session_state.quote_items = pd.read_csv(saved_quote_file)
                 st.success("Quote successfully loaded!")
-                st.rerun()
+                # ✅ FIX: The st.rerun() call has been removed to prevent the "stuck loading" bug.
             except Exception as e:
                 st.error(f"Error loading CSV: {e}")
 
@@ -354,7 +360,6 @@ if not st.session_state.quote_items.empty:
                             st.session_state.customer_logo_b64 = base64.b64encode(logo_file.read()).decode()
                 
                 st.success("Customer Profile loaded!")
-                # ✅ FIX: The st.rerun() call has been removed to prevent the error.
             except Exception as e:
                 st.error(f"Error reading .zip file: {e}")
 
