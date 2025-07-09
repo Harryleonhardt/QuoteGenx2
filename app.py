@@ -323,7 +323,7 @@ if not st.session_state.quote_items.empty:
                                 st.session_state.user_details['email'] = details.get('email', '')
                                 st.session_state.user_details['phone'] = details.get('phone', '')
                     st.success("Staff Profile loaded!")
-                    st.rerun()
+                    # ✅ FIX: The st.rerun() call has been removed to prevent the error.
                 except Exception as e:
                     st.error(f"Error reading staff profile: {e}")
             
@@ -395,6 +395,6 @@ if not st.session_state.quote_items.empty:
 
         if submitted:
             st.info("PDF Generation triggered. This might take a moment...")
-            # PDF generation logic would go here.
+            # PDF generation logic here.
             # If it continues to hang, this part needs to be refactored.
             pass
