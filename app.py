@@ -35,7 +35,7 @@ st.set_page_config(
 st.markdown("""
 <style>
     .stApp { background-color: #f8f9fa; font-family: 'Inter', sans-serif; }
-    .step-container { border: 1px solid #dee2e6; border-radius: 0.8rem; padding: 1.5rem 2rem; background-color: white; box-shadow: 0 4px 12px -1px rgb(0 0 0 / 0.05); margin-bottom: 2rem; }
+    .st-emotion-cache-1y4p8pa { padding-top: 2rem; }
     h1, h2, h3 { color: #343a40; }
     .stButton > button { background-color: #a0c4ff; color: #002b6e !important; border: 1px solid #a0c4ff !important; border-radius: 0.375rem; font-weight: 600; }
     .stButton > button:hover { background-color: #8ab4f8; border-color: #8ab4f8; color: #002b6e !important; }
@@ -88,15 +88,17 @@ def _calculate_sell_prices(df: pd.DataFrame) -> pd.DataFrame:
 
 def apply_sorting():
     sort_key = st.session_state.sort_by
-    if sort_key in st.session_state.quote_items.columns:
-        st.session_state.quote_items = st.session_state.quote_items.sort_values(
-            by=sort_key, kind='mergesort'
-        ).reset_index(drop=True)
+    if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
+        if sort_key in st.session_state.quote_items.columns:
+            st.session_state.quote_items = st.session_state.quote_items.sort_values(
+                by=sort_key, kind='mergesort'
+            ).reset_index(drop=True)
 
 def apply_global_margin():
-    global_margin_value = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
-    st.session_state.quote_items['MARGIN'] = global_margin_value
-    st.toast(f"Applied {global_margin_value}% margin to all items.")
+    if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
+        global_margin_value = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
+        st.session_state.quote_items['MARGIN'] = global_margin_value
+        st.toast(f"Applied {global_margin_value}% margin to all items.")
 
 def add_row(index_offset):
     if st.session_state.get("selected_row_index") is None: return
@@ -152,7 +154,7 @@ if "processing_triggered" not in st.session_state:
 
 # --- Main App UI ---
 st.title("AWM Quote Generator")
-st.caption(f"Quote prepared by: **{st.session_state.user_details['name'] or 'Your Name'}**")
+st.caption(f"Quote prepared by: **{st.session_state.user_details.get('name', 'Your Name')}**")
 st.divider()
 
 # --- Main Processing Block ---
@@ -177,12 +179,8 @@ if st.session_state.processing_triggered:
                 "items": {
                     "type": "OBJECT",
                     "properties": {
-                        "TYPE": {"type": "STRING"},
-                        "QTY": {"type": "NUMBER"},
-                        "Supplier": {"type": "STRING"},
-                        "CAT_NO": {"type": "STRING"},
-                        "Description": {"type": "STRING"},
-                        "COST_PER_UNIT": {"type": "NUMBER"}
+                        "TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"},
+                        "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}
                     },
                     "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]
                 }
@@ -281,13 +279,13 @@ if not st.session_state.quote_items.empty:
         st.subheader("Save Current Quote")
         csv_data = st.session_state.quote_items.to_csv(index=False).encode('utf-8')
         st.download_button(
-            label="💾 Save Quote to CSV", data=csv_data, file_name=f"Saved_Quote_{st.session_state.quote_details['quoteNumber']}.csv",
+            label="💾 Save Quote to CSV", data=csv_data, file_name=f"Saved_Quote_{st.session_state.quote_details.get('quoteNumber', 'quote')}.csv",
             mime='text/csv', use_container_width=True, help="Download the current quote table to a CSV file."
         )
 
         st.divider()
         st.subheader("Row Operations")
-        row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in st.session_state.quote_items.iterrows()]
+        row_options = [f"Row {i+1}: {row.get('Description', 'No Description')[:50]}..." for i, row in st.session_state.quote_items.iterrows()]
         selected_row_str = st.selectbox("Select a row to modify:", options=row_options, index=None, placeholder="Choose a row...")
         if selected_row_str:
             st.session_state.selected_row_index = row_options.index(selected_row_str)
@@ -298,7 +296,7 @@ if not st.session_state.quote_items.empty:
 
         st.divider()
         st.subheader("✍️ AI Description Summarizer")
-        summary_row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in st.session_state.quote_items.iterrows()]
+        summary_row_options = [f"Row {i+1}: {row.get('Description', 'No Description')[:50]}..." for i, row in st.session_state.quote_items.iterrows()]
         selected_item_str_for_summary = st.selectbox("Select Item to Summarize", options=summary_row_options, index=None, placeholder="Choose an item...", key="summary_selectbox")
         if selected_item_str_for_summary:
             st.session_state.summary_selectbox_index = summary_row_options.index(selected_item_str_for_summary)
@@ -323,16 +321,15 @@ if not st.session_state.quote_items.empty:
                                 st.session_state.user_details['email'] = details.get('email', '')
                                 st.session_state.user_details['phone'] = details.get('phone', '')
                     st.success("Staff Profile loaded!")
-                    # ✅ FIX: The st.rerun() call has been removed to prevent the error.
                 except Exception as e:
                     st.error(f"Error reading staff profile: {e}")
             
             c1, c2 = st.columns(2)
-            st.session_state.user_details['name'] = c1.text_input("Your Name", value=st.session_state.user_details['name'])
-            st.session_state.user_details['job_title'] = c2.text_input("Job Title", value=st.session_state.user_details['job_title'])
-            st.session_state.user_details['email'] = c1.text_input("Your Email", value=st.session_state.user_details['email'])
-            st.session_state.user_details['phone'] = c2.text_input("Your Phone", value=st.session_state.user_details['phone'])
-            st.session_state.user_details['branch'] = c1.text_input("Branch", value=st.session_state.user_details['branch'])
+            st.session_state.user_details['name'] = c1.text_input("Your Name", value=st.session_state.user_details.get('name', ''))
+            st.session_state.user_details['job_title'] = c2.text_input("Job Title", value=st.session_state.user_details.get('job_title', ''))
+            st.session_state.user_details['email'] = c1.text_input("Your Email", value=st.session_state.user_details.get('email', ''))
+            st.session_state.user_details['phone'] = c2.text_input("Your Phone", value=st.session_state.user_details.get('phone', ''))
+            st.session_state.user_details['branch'] = c1.text_input("Branch", value=st.session_state.user_details.get('branch', ''))
 
         st.divider()
         
@@ -355,9 +352,9 @@ if not st.session_state.quote_items.empty:
                     if logo_file_name:
                         with zip_ref.open(logo_file_name) as logo_file:
                             st.session_state.customer_logo_b64 = base64.b64encode(logo_file.read()).decode()
-                            
+                
                 st.success("Customer Profile loaded!")
-                st.rerun()
+                # ✅ FIX: The st.rerun() call has been removed to prevent the error.
             except Exception as e:
                 st.error(f"Error reading .zip file: {e}")
 
@@ -395,6 +392,100 @@ if not st.session_state.quote_items.empty:
 
         if submitted:
             st.info("PDF Generation triggered. This might take a moment...")
-            # PDF generation logic here.
-            # If it continues to hang, this part needs to be refactored.
-            pass
+            
+            final_df = _calculate_sell_prices(st.session_state.quote_items)
+            items_html = ""
+            for i, row in final_df.iterrows():
+                items_html += f"""
+                <tr class="border-b border-gray-200">
+                    <td class="p-2 align-top">{i + 1}</td>
+                    <td class="p-2 align-top">{row.get('TYPE','')}</td>
+                    <td class="p-2 align-top">{row.get('QTY','')}</td>
+                    <td class="p-2 align-top">{row.get('Supplier','')}</td>
+                    <td class="p-2 w-1/3 align-top">
+                        <strong class="block text-xs font-bold">{row.get('CAT_NO','')}</strong>
+                        <span>{row.get('Description','')}</span>
+                    </td>
+                    <td class="p-2 text-right align-top">{format_currency(row.get('SELL_UNIT_EX_GST'))}</td>
+                    <td class="p-2 text-right align-top">{format_currency(row.get('SELL_TOTAL_EX_GST'))}</td>
+                </tr>"""
+
+            company_logo_html = f'<img src="data:image/png;base64,{st.session_state.get("company_logo_b64")}" alt="Company Logo" class="h-16 mb-4">' if st.session_state.get("company_logo_b64") else ''
+            customer_logo_html = f'<img src="data:image/png;base64,{st.session_state.get("customer_logo_b64")}" alt="Customer Logo" class="max-h-24 object-contain">' if st.session_state.get("customer_logo_b64") else ''
+            
+            address_html = q_details.get('address', '').replace('\n', '<br>')
+            quote_to_html = f"""
+                <h2 class="font-bold text-gray-800 mb-2">QUOTE TO:</h2>
+                <p class="text-gray-700">{q_details.get('customerName','')}</p>
+                <p class="text-gray-700">{address_html}</p>
+                <p class="text-gray-700 mt-2"><strong class="font-bold text-gray-800">Attn:</strong> {q_details.get("attention", "N/A")}</p>
+            """
+
+            quote_html = f"""
+            <!DOCTYPE html><html lang="en">
+            <head><meta charset="UTF-8"><title>Quote {q_details.get('quoteNumber')}</title><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet"></head>
+            <body>
+                <div class="bg-white">
+                    <header class="flex justify-between items-start mb-8 border-b border-gray-300 pb-8">
+                        <div>
+                            {company_logo_html}
+                            <h1 class="text-2xl font-bold text-gray-800">{st.session_state.user_details.get('branch','')}</h1>
+                            <p class="text-sm text-gray-600">31-33 Rooks Road, Nunawading, 3131</p>
+                            <p class="text-sm text-gray-600">A Division of Metal Manufactures Limited (A.B.N. 13 003 762 641)</p>
+                        </div>
+                        <div class="text-right">
+                            {customer_logo_html}
+                            <h2 class="text-3xl font-bold text-gray-700 mt-4">QUOTATION</h2>
+                        </div>
+                    </header>
+                    <section class="grid grid-cols-2 gap-6 mb-8">
+                        <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">{quote_to_html}</div>
+                        <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                            <p class="text-gray-700"><strong class="font-bold text-gray-800">PROJECT:</strong> {q_details.get('projectName')}</p>
+                            <p class="text-gray-700"><strong class="font-bold text-gray-800">QUOTE #:</strong> {q_details.get('quoteNumber')}</p>
+                            <p class="text-gray-700"><strong class="font-bold text-gray-800">DATE:</strong> {q_details.get('date')}</p>
+                        </div>
+                    </section>
+                    <main>
+                        <table class="w-full text-left text-sm" style="table-layout: auto;">
+                            <thead class="bg-slate-800 text-white"><tr>
+                                <th class="p-2 rounded-tl-lg">ITEM</th><th class="p-2">TYPE</th><th class="p-2">QTY</th><th class="p-2">BRAND</th>
+                                <th class="p-2 w-1/3">PRODUCT DETAILS</th>
+                                <th class="p-2 text-right">UNIT EX GST</th><th class="p-2 text-right rounded-tr-lg">TOTAL EX GST</th>
+                            </tr></thead>
+                            <tbody class="divide-y divide-gray-200">{items_html}</tbody>
+                        </table>
+                    </main>
+                    <footer class="mt-8 flex justify-end" style="page-break-inside: avoid;">
+                        <div class="w-2/5">
+                            <div class="flex justify-between p-2 bg-gray-100 border-b border-gray-200"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(sub_total)}</span></div>
+                            <div class="flex justify-between p-2 bg-gray-100 border-b border-gray-200"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{format_currency(gst_total)}</span></div>
+                            <div class="flex justify-between p-3 bg-gray-200 rounded-b-lg"><span class="font-bold text-gray-900 text-lg">Grand Total (Inc GST):</span><span class="font-bold text-gray-900 text-lg">{format_currency(grand_total)}</span></div>
+                        </div>
+                    </footer>
+                    <div class="mt-12 pt-8" style="page-break-inside: avoid;">
+                        <h3 class="font-bold text-gray-800">Prepared For You By:</h3>
+                        <p class="text-gray-700 mt-2">{st.session_state.user_details.get('name')}</p>
+                        <p class="text-gray-600 text-sm">{st.session_state.user_details.get('job_title')}</p>
+                        <p class="text-gray-600 text-sm">{st.session_state.user_details.get('branch')}</p>
+                        <p class="mt-2 text-sm"><strong>Email:</strong> {st.session_state.user_details.get('email')}</p>
+                        <p class="text-sm"><strong>Phone:</strong> {st.session_state.user_details.get('phone')}</p>
+                    </div>
+                    <div class="mt-12 text-xs text-gray-500 border-t border-gray-300 pt-4" style="page-break-inside: avoid;">
+                        <h3 class="font-bold mb-2">CONDITIONS:</h3>
+                        <p>This offer is valid for 30 days. All goods are sold under MMEM's Terms and Conditions of Sale. Any changes in applicable taxes (GST) or tariffs which may occur will be to your account.</p>
+                    </div>
+                </div>
+            </body></html>
+            """
+            pdf_css = """@page { size: A4; margin: 1.5cm; } body { font-family: 'Inter', sans-serif; } thead { display: table-header-group; } tfoot { display: table-footer-group; } table { width: 100%; border-collapse: collapse; } tr { page-break-inside: avoid !important; } th, td { text-align: left; padding: 4px 6px; vertical-align: top; } th { background-color: #1e293b; color: white; } td.text-right, th.text-right { text-align: right; }"""
+            combined_css = [CSS(string='@import url("https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css");'), CSS(string=pdf_css)]
+            
+            try:
+                pdf_bytes = HTML(string=quote_html).write_pdf(stylesheets=combined_css)
+                st.download_button(
+                    label="✅ Download Final Quote as PDF", data=pdf_bytes, file_name=f"Quote_{q_details.get('quoteNumber', 'quote')}.pdf",
+                    mime='application/pdf', use_container_width=True
+                )
+            except Exception as e:
+                st.error(f"Failed to generate PDF: {e}")
