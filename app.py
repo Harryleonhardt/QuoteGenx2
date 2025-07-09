@@ -214,9 +214,6 @@ if st.session_state.processing_triggered:
 
             if failed_files:
                 st.warning(f"Could not process the following files: {', '.join(failed_files)}")
-            
-            # ✅ FIX: The line causing the error has been removed.
-            # st.session_state.file_uploader_state = [] 
 
 # --- STEP 1: START OR LOAD A QUOTE ---
 with st.container(border=True):
@@ -339,10 +336,33 @@ if not st.session_state.quote_items.empty:
 
         st.divider()
         
+        st.header("Customer & Project Details")
+        st.subheader("Load Customer Profile (Optional)")
+        customer_profile_zip = st.file_uploader("Upload Customer Profile (.zip)", type="zip", key="customer_zip", help="Upload a .zip with customer details and logo.")
+        
+        if customer_profile_zip:
+            try:
+                with zipfile.ZipFile(customer_profile_zip, 'r') as zip_ref:
+                    json_file_name = next((f for f in zip_ref.namelist() if f.lower().endswith('.json')), None)
+                    if json_file_name:
+                        with zip_ref.open(json_file_name) as json_file:
+                            details = json.load(json_file)
+                            st.session_state.quote_details['customerName'] = details.get('customerName', '')
+                            st.session_state.quote_details['attention'] = details.get('attention', '')
+                            st.session_state.quote_details['address'] = details.get('address', '')
+                    
+                    logo_file_name = next((f for f in zip_ref.namelist() if f.lower().endswith(('.png', '.jpg', '.jpeg'))), None)
+                    if logo_file_name:
+                        with zip_ref.open(logo_file_name) as logo_file:
+                            st.session_state.customer_logo_b64 = base64.b64encode(logo_file.read()).decode()
+                            
+                st.success("Customer Profile loaded!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error reading .zip file: {e}")
+
         with st.form("quote_details_form"):
-            st.header("Customer & Project Details")
-            
-            customer_profile_zip = st.file_uploader("Upload Customer Profile (.zip)", type="zip", key="customer_zip", help="Upload a .zip with customer details and logo.")
+            st.subheader("Enter Details Manually")
             
             q_details = st.session_state.quote_details
             c1, c2 = st.columns(2)
@@ -374,10 +394,7 @@ if not st.session_state.quote_items.empty:
             submitted = st.form_submit_button("Generate Final Quote PDF", type="primary", use_container_width=True)
 
         if submitted:
-            # This is a placeholder for the PDF generation logic.
-            # A more robust implementation would use callbacks or a multi-page design
-            # to prevent timeouts on large PDFs.
             st.info("PDF Generation triggered. This might take a moment...")
-            # For now, we assume the logic is here and might be slow.
-            # If it continues to fail, the PDF generation part needs to be refactored.
+            # PDF generation logic would go here.
+            # If it continues to hang, this part needs to be refactored.
             pass
