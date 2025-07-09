@@ -3,5 +3,3 @@ google-generativeai
 pandas
 Pillow
 weasyprint
-google-cloud-firestore
-google-auth-oauthlib
