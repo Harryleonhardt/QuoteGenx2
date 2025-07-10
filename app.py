@@ -50,6 +50,10 @@ st.markdown("""
 
 
 # --- Helper & Callback Functions ---
+def file_to_generative_part(file):
+    bytes_io = BytesIO(file.getvalue())
+    return {"mime_type": file.type, "data": bytes_io.read()}
+
 def format_currency(num):
     if pd.isna(num) or num is None: return "$0.00"
     return f"${num:,.2f}"
@@ -153,14 +157,13 @@ col2.title("AWM Quote Generator")
 st.caption("App created by Harry Leonhardt")
 st.divider()
 
-
 # --- STEP 1: START OR LOAD A QUOTE ---
 with st.container(border=True):
     st.header("Step 1: Start or Load a Quote")
     
     tab1, tab2 = st.tabs(["➕ Start New Quote", "📂 Load Saved Quote"])
 
-    # ✅ FIX: This tab now uses the most stable page-by-page processing logic
+    # ✅ FIX: This tab now contains the hybrid "batch" vs "one-by-one" logic
     with tab1:
         st.markdown("Upload one or more supplier quote documents (PDF or TXT).")
         st.file_uploader(
@@ -168,65 +171,91 @@ with st.container(border=True):
             key='file_uploader_state'
         )
 
-        files_to_process = st.session_state.get('file_uploader_state', [])
-        if files_to_process:
-            st.write(f"**{len(files_to_process)} file(s) ready to process:**")
-            
-            for f in files_to_process:
-                st.caption(f.name)
-            
-            st.divider()
+        processing_mode = st.radio(
+            "Processing Mode",
+            ["Process All at Once (Fast)", "Process One by One (Stable)"],
+            key="processing_mode",
+            horizontal=True,
+            help="Choose 'Stable' if the app crashes when processing large or numerous files."
+        )
+        
+        st.divider()
+        
+        uploaded_files = st.session_state.get('file_uploader_state', [])
 
-            if st.button("Process Next File", use_container_width=True):
-                file_to_process = st.session_state.file_uploader_state.pop(0)
+        if processing_mode == "Process All at Once (Fast)":
+            if st.button("Process All Uploaded Files", use_container_width=True, disabled=not uploaded_files):
+                with st.spinner(f"Processing {len(uploaded_files)} file(s)..."):
+                    all_new_items = []
+                    failed_files = []
+                    extraction_prompt = "From the provided text, extract all line items..."
+                    json_schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"},"CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}}, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]}}
+                    model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
 
-                with st.spinner(f"Processing `{file_to_process.name}` page by page..."):
-                    try:
-                        all_items_from_file = []
-                        
-                        # Use PyMuPDF to open the document from memory
-                        doc = fitz.open(stream=file_to_process.read(), filetype="pdf")
-                        
-                        for page_num, page in enumerate(doc):
-                            st.write(f"...analyzing page {page_num + 1} of {len(doc)}")
-                            page_text = page.get_text()
-                            
-                            if page_text.strip():
-                                extraction_prompt = (
-                                    "From the following text (from a single page), extract all line items. For each item, extract: "
-                                    "TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. "
-                                    "Return ONLY a valid JSON array of objects. If no items are found, return an empty array []."
-                                )
-                                json_schema = {
-                                    "type": "ARRAY", "items": {
-                                        "type": "OBJECT", "properties": {
-                                            "TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"},
-                                            "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}
-                                        }, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]
-                                    }
-                                }
-                                model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
-                                
-                                response = model.generate_content([extraction_prompt, page_text])
+                    for i, file in enumerate(uploaded_files):
+                        try:
+                            st.write(f"Processing `{file.name}`...")
+                            doc = fitz.open(stream=file.read(), filetype="pdf")
+                            full_text = "".join([page.get_text() for page in doc])
+                            if full_text.strip():
+                                response = model.generate_content([extraction_prompt, full_text])
                                 extracted_data = json.loads(response.text)
-
                                 if extracted_data:
-                                    all_items_from_file.extend(extracted_data)
-                        
-                        if all_items_from_file:
-                            new_df = pd.DataFrame(all_items_from_file)
-                            new_df['DISC'] = 0.0
-                            new_df['MARGIN'] = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
-                            st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
-                            apply_sorting()
-                            st.success(f"Successfully processed {len(all_items_from_file)} items from `{file_to_process.name}`!")
-                        else:
-                            st.warning(f"No items found in `{file_to_process.name}`.")
-
-                    except Exception as e:
-                        st.error(f"An error occurred processing `{file_to_process.name}`: {e}")
-                
+                                    all_new_items.extend(extracted_data)
+                            if i < len(uploaded_files) - 1:
+                                time.sleep(2)
+                        except Exception as e:
+                            st.error(f"An error occurred processing `{file.name}`: {e}")
+                            failed_files.append(file.name)
+                    
+                    if all_new_items:
+                        new_df = pd.DataFrame(all_new_items)
+                        new_df['DISC'] = 0.0
+                        new_df['MARGIN'] = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
+                        st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
+                        apply_sorting()
+                        st.success(f"Successfully extracted {len(all_new_items)} items!")
+                    if failed_files:
+                        st.warning(f"Could not process the following files: {', '.join(failed_files)}")
                 st.rerun()
+
+        else: # One by One (Stable)
+            if uploaded_files:
+                st.write(f"**{len(uploaded_files)} file(s) ready to process:**")
+                for f in uploaded_files:
+                    st.caption(f.name)
+                
+                st.divider()
+
+                if st.button("Process Next File", use_container_width=True):
+                    file_to_process = st.session_state.file_uploader_state.pop(0)
+                    with st.spinner(f"Processing `{file_to_process.name}` page by page..."):
+                        try:
+                            all_items_from_file = []
+                            doc = fitz.open(stream=file_to_process.read(), filetype="pdf")
+                            for page_num, page in enumerate(doc):
+                                st.write(f"...analyzing page {page_num + 1} of {len(doc)}")
+                                page_text = page.get_text()
+                                if page_text.strip():
+                                    extraction_prompt = "From the following text (from a single page), extract all line items..."
+                                    json_schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"}, "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}},"required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]}}
+                                    model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
+                                    response = model.generate_content([extraction_prompt, page_text])
+                                    extracted_data = json.loads(response.text)
+                                    if extracted_data:
+                                        all_items_from_file.extend(extracted_data)
+                            if all_items_from_file:
+                                new_df = pd.DataFrame(all_items_from_file)
+                                new_df['DISC'] = 0.0
+                                new_df['MARGIN'] = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
+                                st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
+                                apply_sorting()
+                                st.success(f"Successfully processed {len(all_items_from_file)} items from `{file_to_process.name}`!")
+                            else:
+                                st.warning(f"No items found in `{file_to_process.name}`.")
+                        except Exception as e:
+                            st.error(f"An error occurred processing `{file_to_process.name}`: {e}")
+                    st.rerun()
 
     with tab2:
         st.markdown("Load a previously saved quote from a CSV file.")
@@ -366,12 +395,11 @@ if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
             st.divider()
             st.header("Review Totals & Generate PDF")
             df_for_totals = _calculate_sell_prices(st.session_state.quote_items)
-            total_cost_pre_margin = (df_for_totals['COST_PER_UNIT'] * (1 - df_for_totals['DISC'] / 100) * df_for_totals['QTY']).sum()
             sub_total = df_for_totals['SELL_TOTAL_EX_GST'].sum()
             gst_total = sub_total * 0.10
             grand_total = sub_total + gst_total
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Total Cost (Pre-Margin)", format_currency(total_cost_pre_margin))
+            c1.metric("Total Cost (Pre-Margin)", format_currency((df_for_totals['COST_PER_UNIT'] * (1 - df_for_totals['DISC'] / 100) * df_for_totals['QTY']).sum()))
             c2.metric("Sub-Total (ex. GST)", format_currency(sub_total))
             c3.metric("GST (10%)", format_currency(gst_total))
             c4.metric("Grand Total (inc. GST)", format_currency(grand_total))
