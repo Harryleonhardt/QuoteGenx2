@@ -10,6 +10,8 @@ from pathlib import Path
 from PIL import Image
 
 try:
+    # PyMuPDF is a new requirement
+    import fitz
     from weasyprint import HTML, CSS
     WEASYPRINT_AVAILABLE = True
 except ImportError:
@@ -48,10 +50,6 @@ st.markdown("""
 
 
 # --- Helper & Callback Functions ---
-def file_to_generative_part(file):
-    bytes_io = BytesIO(file.getvalue())
-    return {"mime_type": file.type, "data": bytes_io.read()}
-
 def format_currency(num):
     if pd.isna(num) or num is None: return "$0.00"
     return f"${num:,.2f}"
@@ -155,13 +153,14 @@ col2.title("AWM Quote Generator")
 st.caption("App created by Harry Leonhardt")
 st.divider()
 
+
 # --- STEP 1: START OR LOAD A QUOTE ---
 with st.container(border=True):
     st.header("Step 1: Start or Load a Quote")
     
     tab1, tab2 = st.tabs(["➕ Start New Quote", "📂 Load Saved Quote"])
 
-    # ✅ FIX: This tab now uses the more stable one-by-one processing logic.
+    # ✅ FIX: This tab now uses the most stable page-by-page processing logic
     with tab1:
         st.markdown("Upload one or more supplier quote documents (PDF or TXT).")
         st.file_uploader(
@@ -172,6 +171,7 @@ with st.container(border=True):
         files_to_process = st.session_state.get('file_uploader_state', [])
         if files_to_process:
             st.write(f"**{len(files_to_process)} file(s) ready to process:**")
+            
             for f in files_to_process:
                 st.caption(f.name)
             
@@ -180,35 +180,46 @@ with st.container(border=True):
             if st.button("Process Next File", use_container_width=True):
                 file_to_process = st.session_state.file_uploader_state.pop(0)
 
-                with st.spinner(f"Processing `{file_to_process.name}`..."):
+                with st.spinner(f"Processing `{file_to_process.name}` page by page..."):
                     try:
-                        extraction_prompt = (
-                            "From the provided document, extract all line items. For each item, extract: "
-                            "TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. "
-                            "Return ONLY a valid JSON array of objects. Ensure QTY and COST_PER_UNIT are numbers. "
-                            "**Crucially, all string values must be properly formatted...**"
-                        )
-                        json_schema = {
-                            "type": "ARRAY", "items": {
-                                "type": "OBJECT", "properties": {
-                                    "TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"},
-                                    "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}
-                                }, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]
-                            }
-                        }
-                        model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
+                        all_items_from_file = []
                         
-                        part = file_to_generative_part(file_to_process)
-                        response = model.generate_content([extraction_prompt, part])
-                        extracted_data = json.loads(response.text)
+                        # Use PyMuPDF to open the document from memory
+                        doc = fitz.open(stream=file_to_process.read(), filetype="pdf")
+                        
+                        for page_num, page in enumerate(doc):
+                            st.write(f"...analyzing page {page_num + 1} of {len(doc)}")
+                            page_text = page.get_text()
+                            
+                            if page_text.strip():
+                                extraction_prompt = (
+                                    "From the following text (from a single page), extract all line items. For each item, extract: "
+                                    "TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. "
+                                    "Return ONLY a valid JSON array of objects. If no items are found, return an empty array []."
+                                )
+                                json_schema = {
+                                    "type": "ARRAY", "items": {
+                                        "type": "OBJECT", "properties": {
+                                            "TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"},
+                                            "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}
+                                        }, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]
+                                    }
+                                }
+                                model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
+                                
+                                response = model.generate_content([extraction_prompt, page_text])
+                                extracted_data = json.loads(response.text)
 
-                        if extracted_data:
-                            new_df = pd.DataFrame(extracted_data)
+                                if extracted_data:
+                                    all_items_from_file.extend(extracted_data)
+                        
+                        if all_items_from_file:
+                            new_df = pd.DataFrame(all_items_from_file)
                             new_df['DISC'] = 0.0
                             new_df['MARGIN'] = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
                             st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
                             apply_sorting()
-                            st.success(f"Successfully processed `{file_to_process.name}`!")
+                            st.success(f"Successfully processed {len(all_items_from_file)} items from `{file_to_process.name}`!")
                         else:
                             st.warning(f"No items found in `{file_to_process.name}`.")
 
