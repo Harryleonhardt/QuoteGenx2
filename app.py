@@ -134,7 +134,7 @@ if not check_password():
 
 # --- Session State Initialization ---
 if "quote_items" not in st.session_state:
-    st.session_state.quote_items = pd.DataFrame(columns=["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT", "DISC", "MARGIN"])
+    st.session_state.quote_items = pd.DataFrame(columns=["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT", "DISC", "MARGIN", "SELL_UNIT_EX_GST", "SELL_TOTAL_EX_GST"])
 if "user_details" not in st.session_state:
     st.session_state.user_details = {"name": "", "job_title": "Sales", "branch": "AWM Nunawading", "email": "", "phone": "03 8846 2500"}
 if "quote_details" not in st.session_state:
@@ -163,7 +163,6 @@ with st.container(border=True):
     
     tab1, tab2 = st.tabs(["➕ Start New Quote", "📂 Load Saved Quote"])
 
-    # ✅ FIX: This tab now contains the hybrid "batch" vs "one-by-one" logic
     with tab1:
         st.markdown("Upload one or more supplier quote documents (PDF or TXT).")
         st.file_uploader(
@@ -171,91 +170,56 @@ with st.container(border=True):
             key='file_uploader_state'
         )
 
-        processing_mode = st.radio(
-            "Processing Mode",
-            ["Process All at Once (Fast)", "Process One by One (Stable)"],
-            key="processing_mode",
-            horizontal=True,
-            help="Choose 'Stable' if the app crashes when processing large or numerous files."
-        )
-        
-        st.divider()
-        
-        uploaded_files = st.session_state.get('file_uploader_state', [])
+        files_to_process = st.session_state.get('file_uploader_state', [])
+        if files_to_process:
+            st.write(f"**{len(files_to_process)} file(s) ready to process:**")
+            for f in files_to_process:
+                st.caption(f.name)
+            
+            st.divider()
 
-        if processing_mode == "Process All at Once (Fast)":
-            if st.button("Process All Uploaded Files", use_container_width=True, disabled=not uploaded_files):
-                with st.spinner(f"Processing {len(uploaded_files)} file(s)..."):
-                    all_new_items = []
-                    failed_files = []
-                    extraction_prompt = "From the provided text, extract all line items..."
-                    json_schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"},"CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}}, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]}}
-                    model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
+            if st.button("Process Next File", use_container_width=True):
+                file_to_process = st.session_state.file_uploader_state.pop(0)
 
-                    for i, file in enumerate(uploaded_files):
-                        try:
-                            st.write(f"Processing `{file.name}`...")
-                            doc = fitz.open(stream=file.read(), filetype="pdf")
-                            full_text = "".join([page.get_text() for page in doc])
-                            if full_text.strip():
-                                response = model.generate_content([extraction_prompt, full_text])
+                with st.spinner(f"Processing `{file_to_process.name}` page by page..."):
+                    try:
+                        all_items_from_file = []
+                        doc = fitz.open(stream=file_to_process.read(), filetype="pdf")
+                        
+                        for page_num, page in enumerate(doc):
+                            st.write(f"...analyzing page {page_num + 1} of {len(doc)}")
+                            page_text = page.get_text()
+                            
+                            if page_text.strip():
+                                extraction_prompt = "From the text, extract line items: TYPE, QTY, Supplier, CAT_NO, Description, COST_PER_UNIT. Return ONLY a valid JSON array. If none, return []."
+                                json_schema = {
+                                    "type": "ARRAY", "items": {
+                                        "type": "OBJECT", "properties": {
+                                            "TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"},
+                                            "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}
+                                        }, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]
+                                    }
+                                }
+                                model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
+                                response = model.generate_content([extraction_prompt, page_text])
                                 extracted_data = json.loads(response.text)
                                 if extracted_data:
-                                    all_new_items.extend(extracted_data)
-                            if i < len(uploaded_files) - 1:
-                                time.sleep(2)
-                        except Exception as e:
-                            st.error(f"An error occurred processing `{file.name}`: {e}")
-                            failed_files.append(file.name)
-                    
-                    if all_new_items:
-                        new_df = pd.DataFrame(all_new_items)
-                        new_df['DISC'] = 0.0
-                        new_df['MARGIN'] = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
-                        st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
-                        apply_sorting()
-                        st.success(f"Successfully extracted {len(all_new_items)} items!")
-                    if failed_files:
-                        st.warning(f"Could not process the following files: {', '.join(failed_files)}")
-                st.rerun()
+                                    all_items_from_file.extend(extracted_data)
+                        
+                        if all_items_from_file:
+                            new_df = pd.DataFrame(all_items_from_file)
+                            new_df['DISC'] = 0.0
+                            new_df['MARGIN'] = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
+                            st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
+                            apply_sorting()
+                            st.success(f"Successfully processed {len(all_items_from_file)} items from `{file_to_process.name}`!")
+                        else:
+                            st.warning(f"No items found in `{file_to_process.name}`.")
 
-        else: # One by One (Stable)
-            if uploaded_files:
-                st.write(f"**{len(uploaded_files)} file(s) ready to process:**")
-                for f in uploaded_files:
-                    st.caption(f.name)
+                    except Exception as e:
+                        st.error(f"An error occurred processing `{file_to_process.name}`: {e}")
                 
-                st.divider()
-
-                if st.button("Process Next File", use_container_width=True):
-                    file_to_process = st.session_state.file_uploader_state.pop(0)
-                    with st.spinner(f"Processing `{file_to_process.name}` page by page..."):
-                        try:
-                            all_items_from_file = []
-                            doc = fitz.open(stream=file_to_process.read(), filetype="pdf")
-                            for page_num, page in enumerate(doc):
-                                st.write(f"...analyzing page {page_num + 1} of {len(doc)}")
-                                page_text = page.get_text()
-                                if page_text.strip():
-                                    extraction_prompt = "From the following text (from a single page), extract all line items..."
-                                    json_schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"}, "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}},"required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]}}
-                                    model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
-                                    response = model.generate_content([extraction_prompt, page_text])
-                                    extracted_data = json.loads(response.text)
-                                    if extracted_data:
-                                        all_items_from_file.extend(extracted_data)
-                            if all_items_from_file:
-                                new_df = pd.DataFrame(all_items_from_file)
-                                new_df['DISC'] = 0.0
-                                new_df['MARGIN'] = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
-                                st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
-                                apply_sorting()
-                                st.success(f"Successfully processed {len(all_items_from_file)} items from `{file_to_process.name}`!")
-                            else:
-                                st.warning(f"No items found in `{file_to_process.name}`.")
-                        except Exception as e:
-                            st.error(f"An error occurred processing `{file_to_process.name}`: {e}")
-                    st.rerun()
+                st.rerun()
 
     with tab2:
         st.markdown("Load a previously saved quote from a CSV file.")
@@ -272,9 +236,13 @@ if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
         st.header("Step 2: Edit & Refine Quote")
         st.caption("Edit values directly in the table. Calculations update automatically.")
         
-        df_for_display = _calculate_sell_prices(st.session_state.quote_items)
+        # ✅ FIX: This new data editor workflow is more stable.
+        # 1. Recalculate and update the DataFrame in-place right before displaying it.
+        st.session_state.quote_items = _calculate_sell_prices(st.session_state.quote_items)
+
+        # 2. Pass the complete, updated DataFrame directly to the editor.
         edited_df = st.data_editor(
-            df_for_display,
+            st.session_state.quote_items,
             column_config={
                 "COST_PER_UNIT": st.column_config.NumberColumn("Cost/Unit", format="$%.2f"),
                 "DISC": st.column_config.NumberColumn("Disc %", format="%.1f%%"),
@@ -286,17 +254,11 @@ if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
             column_order=["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT", "DISC", "MARGIN", "SELL_UNIT_EX_GST", "SELL_TOTAL_EX_GST"],
             num_rows="dynamic", use_container_width=True, key="data_editor"
         )
-        
-        cols_to_update = ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT", "DISC", "MARGIN"]
-        update_df = edited_df[cols_to_update].copy()
-        numeric_cols = ['QTY', 'COST_PER_UNIT', 'DISC', 'MARGIN']
-        for col in numeric_cols:
-            update_df[col] = pd.to_numeric(update_df[col], errors='coerce').fillna(0)
-        string_cols = ["TYPE", "Supplier", "CAT_NO", "Description"]
-        for col in string_cols:
-            update_df[col] = update_df[col].astype(str).fillna('')
-        st.session_state.quote_items = update_df.reset_index(drop=True)
 
+        # 3. Save the entire state of the editor back. The next rerun will start by
+        # recalculating based on this new data, creating a stable loop.
+        st.session_state.quote_items = edited_df
+        
         st.divider()
         st.subheader("Table Controls")
         c1, c2 = st.columns(2)
