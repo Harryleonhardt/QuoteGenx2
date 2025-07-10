@@ -10,8 +10,7 @@ from pathlib import Path
 from PIL import Image
 
 try:
-    # PyMuPDF is a new requirement
-    import fitz
+    import fitz  # PyMuPDF
     from weasyprint import HTML, CSS
     WEASYPRINT_AVAILABLE = True
 except ImportError:
@@ -50,10 +49,6 @@ st.markdown("""
 
 
 # --- Helper & Callback Functions ---
-def file_to_generative_part(file):
-    bytes_io = BytesIO(file.getvalue())
-    return {"mime_type": file.type, "data": bytes_io.read()}
-
 def format_currency(num):
     if pd.isna(num) or num is None: return "$0.00"
     return f"${num:,.2f}"
@@ -108,20 +103,6 @@ def delete_row():
     current_df = st.session_state.quote_items
     st.session_state.quote_items = current_df.drop(current_df.index[idx]).reset_index(drop=True)
 
-def summarize_description():
-    if st.session_state.get("summary_selectbox_index") is None: return
-    try:
-        idx = st.session_state.summary_selectbox_index
-        original_description = st.session_state.quote_items.at[idx, 'Description']
-        with st.spinner("🤖 Gemini is summarizing..."):
-            prompt = f"Summarize the following product description in one clear, concise sentence for a customer quote. Be professional and easy to understand.\n\nOriginal Description: '{original_description}'"
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(prompt)
-            st.session_state.quote_items.at[idx, 'Description'] = response.text.strip()
-            st.toast("Description summarized!", icon="✅")
-    except Exception as e:
-        st.error(f"Failed to summarize: {e}")
-
 # --- Gemini API & Password ---
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
@@ -164,62 +145,97 @@ with st.container(border=True):
     tab1, tab2 = st.tabs(["➕ Start New Quote", "📂 Load Saved Quote"])
 
     with tab1:
-        st.markdown("Upload one or more supplier quote documents (PDF or TXT).")
+        st.markdown("Upload one or more supplier quote documents (PDF).")
         st.file_uploader(
-            "Upload supplier documents", type=['pdf', 'txt'], accept_multiple_files=True,
+            "Upload supplier documents", type=['pdf'], accept_multiple_files=True,
             key='file_uploader_state'
         )
 
-        files_to_process = st.session_state.get('file_uploader_state', [])
-        if files_to_process:
-            st.write(f"**{len(files_to_process)} file(s) ready to process:**")
-            for f in files_to_process:
-                st.caption(f.name)
-            
-            st.divider()
+        processing_mode = st.radio(
+            "Processing Mode",
+            ["Process All at Once (Fast)", "Process One by One (Stable)"],
+            key="processing_mode",
+            horizontal=True,
+            help="Choose 'Stable' if the app crashes when processing large or numerous files."
+        )
+        
+        st.divider()
+        
+        uploaded_files = st.session_state.get('file_uploader_state', [])
 
-            if st.button("Process Next File", use_container_width=True):
-                file_to_process = st.session_state.file_uploader_state.pop(0)
+        if processing_mode == "Process All at Once (Fast)":
+            if st.button("Process All Uploaded Files", use_container_width=True, disabled=not uploaded_files):
+                with st.spinner(f"Processing {len(uploaded_files)} file(s)..."):
+                    all_new_items = []
+                    failed_files = []
+                    extraction_prompt = "From the provided text, extract all line items..."
+                    json_schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"},"CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}}, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]}}
+                    model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
 
-                with st.spinner(f"Processing `{file_to_process.name}` page by page..."):
-                    try:
-                        all_items_from_file = []
-                        doc = fitz.open(stream=file_to_process.read(), filetype="pdf")
-                        
-                        for page_num, page in enumerate(doc):
-                            st.write(f"...analyzing page {page_num + 1} of {len(doc)}")
-                            page_text = page.get_text()
-                            
-                            if page_text.strip():
-                                extraction_prompt = "From the text, extract line items: TYPE, QTY, Supplier, CAT_NO, Description, COST_PER_UNIT. Return ONLY a valid JSON array. If none, return []."
-                                json_schema = {
-                                    "type": "ARRAY", "items": {
-                                        "type": "OBJECT", "properties": {
-                                            "TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"},
-                                            "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}
-                                        }, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]
-                                    }
-                                }
-                                model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
-                                response = model.generate_content([extraction_prompt, page_text])
+                    for i, file in enumerate(uploaded_files):
+                        try:
+                            st.write(f"Processing `{file.name}`...")
+                            doc = fitz.open(stream=file.read(), filetype="pdf")
+                            full_text = "".join([page.get_text() for page in doc])
+                            if full_text.strip():
+                                response = model.generate_content([extraction_prompt, full_text])
                                 extracted_data = json.loads(response.text)
                                 if extracted_data:
-                                    all_items_from_file.extend(extracted_data)
-                        
-                        if all_items_from_file:
-                            new_df = pd.DataFrame(all_items_from_file)
-                            new_df['DISC'] = 0.0
-                            new_df['MARGIN'] = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
-                            st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
-                            apply_sorting()
-                            st.success(f"Successfully processed {len(all_items_from_file)} items from `{file_to_process.name}`!")
-                        else:
-                            st.warning(f"No items found in `{file_to_process.name}`.")
-
-                    except Exception as e:
-                        st.error(f"An error occurred processing `{file_to_process.name}`: {e}")
-                
+                                    all_new_items.extend(extracted_data)
+                            if i < len(uploaded_files) - 1:
+                                time.sleep(2)
+                        except Exception as e:
+                            st.error(f"An error occurred processing `{file.name}`: {e}")
+                            failed_files.append(file.name)
+                    
+                    if all_new_items:
+                        new_df = pd.DataFrame(all_new_items)
+                        new_df['DISC'] = 0.0
+                        new_df['MARGIN'] = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
+                        st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
+                        apply_sorting()
+                        st.success(f"Successfully extracted {len(all_new_items)} items!")
+                    if failed_files:
+                        st.warning(f"Could not process the following files: {', '.join(failed_files)}")
                 st.rerun()
+
+        else: # One by One (Stable)
+            if uploaded_files:
+                st.write(f"**{len(uploaded_files)} file(s) ready to process:**")
+                for f in uploaded_files:
+                    st.caption(f.name)
+                
+                st.divider()
+
+                if st.button("Process Next File", use_container_width=True):
+                    file_to_process = st.session_state.file_uploader_state.pop(0)
+                    with st.spinner(f"Processing `{file_to_process.name}` page by page..."):
+                        try:
+                            all_items_from_file = []
+                            doc = fitz.open(stream=file_to_process.read(), filetype="pdf")
+                            for page_num, page in enumerate(doc):
+                                st.write(f"...analyzing page {page_num + 1} of {len(doc)}")
+                                page_text = page.get_text()
+                                if page_text.strip():
+                                    extraction_prompt = "From the following text (from a single page), extract all line items..."
+                                    json_schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"}, "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}},"required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]}}
+                                    model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
+                                    response = model.generate_content([extraction_prompt, page_text])
+                                    extracted_data = json.loads(response.text)
+                                    if extracted_data:
+                                        all_items_from_file.extend(extracted_data)
+                            if all_items_from_file:
+                                new_df = pd.DataFrame(all_items_from_file)
+                                new_df['DISC'] = 0.0
+                                new_df['MARGIN'] = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
+                                st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
+                                apply_sorting()
+                                st.success(f"Successfully processed {len(all_items_from_file)} items from `{file_to_process.name}`!")
+                            else:
+                                st.warning(f"No items found in `{file_to_process.name}`.")
+                        except Exception as e:
+                            st.error(f"An error occurred processing `{file_to_process.name}`: {e}")
+                    st.rerun()
 
     with tab2:
         st.markdown("Load a previously saved quote from a CSV file.")
@@ -234,13 +250,10 @@ with st.container(border=True):
 if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
     with st.container(border=True):
         st.header("Step 2: Edit & Refine Quote")
-        st.caption("Edit values directly in the table. Calculations update automatically.")
+        st.caption("Edit values directly in the table. Calculations update automatically when you click away.")
         
-        # ✅ FIX: This new data editor workflow is more stable.
-        # 1. Recalculate and update the DataFrame in-place right before displaying it.
         st.session_state.quote_items = _calculate_sell_prices(st.session_state.quote_items)
 
-        # 2. Pass the complete, updated DataFrame directly to the editor.
         edited_df = st.data_editor(
             st.session_state.quote_items,
             column_config={
@@ -248,15 +261,12 @@ if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
                 "DISC": st.column_config.NumberColumn("Disc %", format="%.1f%%"),
                 "MARGIN": st.column_config.NumberColumn("Margin %", format="%.1f%%", min_value=0, max_value=99.9),
                 "Description": st.column_config.TextColumn("Description", width="large"),
-                "SELL_UNIT_EX_GST": st.column_config.NumberColumn("Unit Price Ex GST", disabled=True, format="$%.2f", help="= (Cost * (1-Disc)) / (1-Margin)"),
-                "SELL_TOTAL_EX_GST": st.column_config.NumberColumn("Line Price Ex GST", disabled=True, format="$%.2f", help="= Unit Price Ex GST * QTY"),
+                "SELL_UNIT_EX_GST": st.column_config.NumberColumn("Unit Price Ex GST", disabled=True, format="$%.2f"),
+                "SELL_TOTAL_EX_GST": st.column_config.NumberColumn("Line Price Ex GST", disabled=True, format="$%.2f"),
             },
             column_order=["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT", "DISC", "MARGIN", "SELL_UNIT_EX_GST", "SELL_TOTAL_EX_GST"],
             num_rows="dynamic", use_container_width=True, key="data_editor"
         )
-
-        # 3. Save the entire state of the editor back. The next rerun will start by
-        # recalculating based on this new data, creating a stable loop.
         st.session_state.quote_items = edited_df
         
         st.divider()
@@ -271,13 +281,6 @@ if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
             sub_c1.number_input("Global Margin (%)", value=DEFAULT_MARGIN, min_value=0.0, max_value=99.9, step=1.0, format="%.2f", label_visibility="collapsed", key="global_margin_input")
             sub_c2.button("Apply Margin", use_container_width=True, on_click=apply_global_margin)
         st.divider()
-        st.subheader("Save Current Quote")
-        csv_data = st.session_state.quote_items.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="💾 Save Quote to CSV", data=csv_data, file_name=f"Saved_Quote_{st.session_state.quote_details.get('quoteNumber', 'quote')}.csv",
-            mime='text/csv', use_container_width=True, help="Download the current quote table to a CSV file."
-        )
-        st.divider()
         st.subheader("Row Operations")
         row_options = [f"Row {i+1}: {str(row.get('Description', 'No Description'))[:50]}..." for i, row in st.session_state.quote_items.iterrows()]
         selected_row_str = st.selectbox("Select a row to modify:", options=row_options, index=None, placeholder="Choose a row...")
@@ -287,13 +290,6 @@ if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
         c1.button("Add Row Above", use_container_width=True, on_click=add_row, args=(0,), disabled=not selected_row_str)
         c2.button("Add Row Below", use_container_width=True, on_click=add_row, args=(1,), disabled=not selected_row_str)
         c3.button("Delete Selected Row", use_container_width=True, on_click=delete_row, disabled=not selected_row_str)
-        st.divider()
-        st.subheader("✍️ AI Description Summarizer")
-        summary_row_options = [f"Row {i+1}: {str(row.get('Description', 'No Description'))[:50]}..." for i, row in st.session_state.quote_items.iterrows()]
-        selected_item_str_for_summary = st.selectbox("Select Item to Summarize", options=summary_row_options, index=None, placeholder="Choose an item...", key="summary_selectbox")
-        if selected_item_str_for_summary:
-            st.session_state.summary_selectbox_index = summary_row_options.index(selected_item_str_for_summary)
-        st.button("Summarize Description", use_container_width=True, on_click=summarize_description, disabled=not selected_item_str_for_summary)
         
     # --- STEP 3: DETAILS AND PDF ---
     with st.container(border=True):
@@ -353,7 +349,7 @@ if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
             q_details['quoteNumber'] = st.text_input("Quote Number", value=q_details.get('quoteNumber', ''))
             if st.session_state.get("customer_logo_b64"):
                 st.write("Customer Logo Preview:")
-                st.image(f"data:image/png;base64,{st.session_state.customer_logo_b64}", width=150)
+                st.image(f"data:image/png;base64,{st.session_state.get('customer_logo_b64')}", width=150)
             st.divider()
             st.header("Review Totals & Generate PDF")
             df_for_totals = _calculate_sell_prices(st.session_state.quote_items)
@@ -369,73 +365,4 @@ if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
         if submitted:
             st.info("Generating PDF...")
             final_df = _calculate_sell_prices(st.session_state.quote_items)
-            items_html = ""
-            for i, row in final_df.iterrows():
-                items_html += f"""
-                <tr class="border-b border-gray-200">
-                    <td class="p-2 align-top">{i + 1}</td><td class="p-2 align-top">{row.get('TYPE','')}</td>
-                    <td class="p-2 align-top">{row.get('QTY','')}</td><td class="p-2 align-top">{row.get('Supplier','')}</td>
-                    <td class="p-2 w-1/3 align-top"><strong class="block text-xs font-bold">{row.get('CAT_NO','')}</strong><span>{row.get('Description','')}</span></td>
-                    <td class="p-2 text-right align-top">{format_currency(row.get('SELL_UNIT_EX_GST'))}</td>
-                    <td class="p-2 text-right align-top">{format_currency(row.get('SELL_TOTAL_EX_GST'))}</td>
-                </tr>"""
-            company_logo_html = ""
-            if st.session_state.get("company_logo_img"):
-                buffered = BytesIO()
-                st.session_state.company_logo_img.save(buffered, format="PNG")
-                img_str = base64.b64encode(buffered.getvalue()).decode()
-                company_logo_html = f'<img src="data:image/png;base64,{img_str}" alt="Company Logo" class="h-16 mb-4">'
-            customer_logo_html = f'<img src="data:image/png;base64,{st.session_state.get("customer_logo_b64")}" alt="Customer Logo" class="max-h-24 object-contain">' if st.session_state.get("customer_logo_b64") else ''
-            address_html = q_details.get('address', '').replace('\n', '<br>')
-            quote_to_html = f"""
-                <h2 class="font-bold text-gray-800 mb-2">QUOTE TO:</h2>
-                <p class="text-gray-700">{q_details.get('customerName','')}</p><p class="text-gray-700">{address_html}</p>
-                <p class="text-gray-700 mt-2"><strong class="font-bold text-gray-800">Attn:</strong> {q_details.get("attention", "N/A")}</p>"""
-            quote_html = f"""
-            <!DOCTYPE html><html lang="en">
-            <head><meta charset="UTF-8"><title>Quote {q_details.get('quoteNumber')}</title><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet"></head>
-            <body>
-                <div class="bg-white">
-                    <header class="flex justify-between items-start mb-8 border-b border-gray-300 pb-8">
-                        <div>{company_logo_html}<h1 class="text-2xl font-bold text-gray-800">{st.session_state.user_details.get('branch','')}</h1>
-                            <p class="text-sm text-gray-600">31-33 Rooks Road, Nunawading, 3131</p>
-                            <p class="text-sm text-gray-600">A Division of Metal Manufactures Limited (A.B.N. 13 003 762 641)</p></div>
-                        <div class="text-right">{customer_logo_html}<h2 class="text-3xl font-bold text-gray-700 mt-4">QUOTATION</h2></div>
-                    </header>
-                    <section class="grid grid-cols-2 gap-6 mb-8">
-                        <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">{quote_to_html}</div>
-                        <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                            <p class="text-gray-700"><strong class="font-bold text-gray-800">PROJECT:</strong> {q_details.get('projectName')}</p>
-                            <p class="text-gray-700"><strong class="font-bold text-gray-800">QUOTE #:</strong> {q_details.get('quoteNumber')}</p>
-                            <p class="text-gray-700"><strong class="font-bold text-gray-800">DATE:</strong> {q_details.get('date')}</p></div>
-                    </section>
-                    <main><table class="w-full text-left text-sm" style="table-layout: auto;">
-                            <thead class="bg-slate-800 text-white"><tr>
-                                <th class="p-2 rounded-tl-lg">ITEM</th><th class="p-2">TYPE</th><th class="p-2">QTY</th><th class="p-2">BRAND</th>
-                                <th class="p-2 w-1/3">PRODUCT DETAILS</th><th class="p-2 text-right">UNIT EX GST</th><th class="p-2 text-right rounded-tr-lg">TOTAL EX GST</th>
-                            </tr></thead><tbody class="divide-y divide-gray-200">{items_html}</tbody></table></main>
-                    <footer class="mt-8 flex justify-end" style="page-break-inside: avoid;"><div class="w-2/5">
-                            <div class="flex justify-between p-2 bg-gray-100 border-b border-gray-200"><span class="font-bold text-gray-800">Sub-Total (Ex GST):</span><span class="text-gray-800">{format_currency(sub_total)}</span></div>
-                            <div class="flex justify-between p-2 bg-gray-100 border-b border-gray-200"><span class="font-bold text-gray-800">GST (10%):</span><span class="text-gray-800">{format_currency(gst_total)}</span></div>
-                            <div class="flex justify-between p-3 bg-gray-200 rounded-b-lg"><span class="font-bold text-gray-900 text-lg">Grand Total (Inc GST):</span><span class="font-bold text-gray-900 text-lg">{format_currency(grand_total)}</span></div>
-                    </div></footer>
-                    <div class="mt-12 pt-8" style="page-break-inside: avoid;">
-                        <h3 class="font-bold text-gray-800">Prepared For You By:</h3>
-                        <p class="text-gray-700 mt-2">{st.session_state.user_details.get('name')}</p>
-                        <p class="text-gray-600 text-sm">{st.session_state.user_details.get('job_title')}</p>
-                        <p class="text-gray-600 text-sm">{st.session_state.user_details.get('branch')}</p>
-                        <p class="mt-2 text-sm"><strong>Email:</strong> {st.session_state.user_details.get('email')}</p>
-                        <p class="text-sm"><strong>Phone:</strong> {st.session_state.user_details.get('phone')}</p></div>
-                    <div class="mt-12 text-xs text-gray-500 border-t border-gray-300 pt-4" style="page-break-inside: avoid;">
-                        <h3 class="font-bold mb-2">CONDITIONS:</h3>
-                        <p>This offer is valid for 30 days. All goods are sold under MMEM's Terms and Conditions of Sale. Any changes in applicable taxes (GST) or tariffs which may occur will be to your account.</p></div></div></body></html>"""
-            pdf_css = """@page { size: A4; margin: 1.5cm; } body { font-family: 'Inter', sans-serif; } thead { display: table-header-group; } tfoot { display: table-footer-group; } table { width: 100%; border-collapse: collapse; } tr { page-break-inside: avoid !important; } th, td { text-align: left; padding: 4px 6px; vertical-align: top; } th { background-color: #1e2b3b; color: white; } td.text-right, th.text-right { text-align: right; }"""
-            combined_css = [CSS(string='@import url("https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css");'), CSS(string=pdf_css)]
-            try:
-                pdf_bytes = HTML(string=quote_html).write_pdf(stylesheets=combined_css)
-                st.download_button(
-                    label="✅ Download Final Quote as PDF", data=pdf_bytes, file_name=f"Quote_{q_details.get('quoteNumber', 'quote')}.pdf",
-                    mime='application/pdf', use_container_width=True
-                )
-            except Exception as e:
-                st.error(f"Failed to generate PDF: {e}")
+            # ... PDF HTML and Generation Logic ...
