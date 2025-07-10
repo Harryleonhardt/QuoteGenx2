@@ -16,6 +16,7 @@ except ImportError:
 
 # --- Page Configuration & Logo ---
 try:
+    # To make this work locally, ensure "AWM Logo (002).png" is in the same folder as your script
     logo_file_path = Path(__file__).parent / "AWM Logo (002).png"
     page_icon_img = Image.open(logo_file_path)
 except FileNotFoundError:
@@ -70,7 +71,8 @@ def check_password():
     if st.session_state.get("password_correct", False): return True
     st.header("Login")
     password = st.text_input("Enter Password", type="password")
-    if password == "AWM374":
+    # Replace "your_password_here" with your actual password
+    if password == st.secrets.get("APP_PASSWORD", "AWM374"):
         st.session_state["password_correct"] = True
         st.rerun()
     elif password:
@@ -83,7 +85,7 @@ def _calculate_sell_prices(df: pd.DataFrame) -> pd.DataFrame:
         df_calc[col] = pd.to_numeric(df_calc[col], errors='coerce').fillna(0)
     cost_after_disc = df_calc['COST_PER_UNIT'] * (1 - df_calc['DISC'] / 100)
     margin_divisor = (1 - df_calc['MARGIN'] / 100)
-    margin_divisor[margin_divisor <= 0] = 0.01
+    margin_divisor[margin_divisor <= 0] = 0.01 # Avoid division by zero or negative margin
     df_calc['SELL_UNIT_EX_GST'] = cost_after_disc / margin_divisor
     df_calc['SELL_TOTAL_EX_GST'] = df_calc['SELL_UNIT_EX_GST'] * df_calc['QTY']
     return df_calc
@@ -128,28 +130,41 @@ def summarize_description():
     except Exception as e:
         st.error(f"Failed to summarize: {e}")
 
-# --- AMENDED: Callback for st.data_editor ---
+# --- FINAL FIX: This is the robust callback for st.data_editor ---
 def update_quote_items_from_editor():
-    """Callback function to update session state from the data editor."""
-    # The data editor's state is accessed via its key in st.session_state
-    edited_data = st.session_state["data_editor"]
-    df = pd.DataFrame(edited_data)
+    """
+    Robust callback to update session state from the data editor.
+    This function now ignores calculated columns to prevent ValueErrors.
+    """
+    # Get the raw state dictionary from the editor
+    edited_data_dict = st.session_state["data_editor"]
     
-    # Define the columns that should be persisted in the state
-    original_cols = ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT", "DISC", "MARGIN"]
+    # Define the columns that we actually want to save (the non-calculated ones)
+    editable_cols = ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT", "DISC", "MARGIN"]
     
-    # Filter to only include columns that exist in the edited dataframe
-    cols_to_keep = [col for col in original_cols if col in df.columns]
+    # Build a NEW, clean dictionary containing ONLY the data from the editable columns.
+    # This is the key step to prevent the "All arrays must be of the same length" error.
+    data_to_save = {
+        col: edited_data_dict[col] 
+        for col in editable_cols 
+        if col in edited_data_dict
+    }
     
-    # Update the session state, ensuring index is reset
-    st.session_state.quote_items = df[cols_to_keep].reset_index(drop=True)
+    # Now, create the DataFrame from this clean, filtered dictionary.
+    try:
+        df = pd.DataFrame(data_to_save)
+        # Update the session state with the clean data
+        st.session_state.quote_items = df.reset_index(drop=True)
+    except ValueError:
+        # This is a fallback, but the filtering above should prevent this from happening.
+        st.warning("A table inconsistency was detected. Please review the data.")
 
 
 # --- Gemini API & Password ---
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 except (FileNotFoundError, KeyError):
-    st.error("🚨 Gemini API Key not found.", icon="🚨")
+    st.error("🚨 Gemini API Key not found. Create a secrets.toml file.", icon="🚨")
     st.stop()
 
 if not check_password():
@@ -189,8 +204,8 @@ with st.container(border=False):
         label_visibility="collapsed"
     )
 
-    if st.button("Process Uploaded Files", use_container_width=True, disabled=not uploaded_files):
-        with st.spinner(f"Processing {len(uploaded_files)} file(s)... (Pausing between files)"):
+    if st.button("Process Uploaded Files", type="primary", use_container_width=True, disabled=not uploaded_files):
+        with st.spinner(f"Processing {len(uploaded_files)} file(s)... This may take a moment."):
             all_new_items = []
             failed_files = []
             extraction_prompt = (
@@ -225,8 +240,9 @@ with st.container(border=False):
                     extracted_data = json.loads(response.text)
                     if extracted_data:
                         all_new_items.extend(extracted_data)
+                    # Optional: A short pause can help avoid rate limiting on some APIs
                     if i < len(uploaded_files) - 1:
-                        time.sleep(2)
+                        time.sleep(1) 
                 except Exception as e:
                     st.error(f"An error occurred processing `{file.name}`: {e}")
                     failed_files.append(file.name)
@@ -249,7 +265,7 @@ with st.container(border=False):
 
 
 if not WEASYPRINT_AVAILABLE:
-     st.error("PDF generation library not found.", icon="🚨")
+     st.error("PDF generation library 'WeasyPrint' not found. Please install it (`pip install weasyprint`).", icon="🚨")
      st.stop()
 
 if not st.session_state.quote_items.empty:
@@ -258,7 +274,6 @@ if not st.session_state.quote_items.empty:
         st.header("Step 2: Edit & Refine Quote")
         st.caption("Edit values directly in the table. Calculations update automatically.")
         
-        # --- AMENDED: Using the on_change callback for stability ---
         st.data_editor(
             _calculate_sell_prices(st.session_state.quote_items),
             column_config={
@@ -291,7 +306,6 @@ if not st.session_state.quote_items.empty:
         st.divider()
         st.subheader("Row Operations")
         
-        # --- AMENDED: Handles non-string data in 'Description' column ---
         row_options = [f"Row {i+1}: {(str(row['Description'] or ''))[:50]}..." for i, row in st.session_state.quote_items.iterrows()]
         selected_row_str = st.selectbox("Select a row to modify:", options=row_options, index=None, placeholder="Choose a row...")
         
@@ -301,12 +315,11 @@ if not st.session_state.quote_items.empty:
         c1, c2, c3 = st.columns(3)
         c1.button("Add Row Above", use_container_width=True, on_click=add_row, args=(0,), disabled=not selected_row_str)
         c2.button("Add Row Below", use_container_width=True, on_click=add_row, args=(1,), disabled=not selected_row_str)
-        c3.button("Delete Selected Row", use_container_width=True, on_click=delete_row, disabled=not selected_row_str)
+        c3.button("Delete Selected Row", type="secondary", use_container_width=True, on_click=delete_row, disabled=not selected_row_str)
 
         st.divider()
         st.subheader("✍️ AI Description Summarizer")
         
-        # --- AMENDED: Handles non-string data in 'Description' column ---
         summary_row_options = [f"Row {i+1}: {(str(row['Description'] or ''))[:50]}..." for i, row in st.session_state.quote_items.iterrows()]
         selected_item_str_for_summary = st.selectbox("Select Item to Summarize", options=summary_row_options, index=None, placeholder="Choose an item...", key="summary_selectbox")
 
@@ -361,125 +374,126 @@ if not st.session_state.quote_items.empty:
             submitted = st.form_submit_button("Generate Final Quote PDF", type="primary", use_container_width=True)
 
         if submitted:
-            final_df = _calculate_sell_prices(st.session_state.quote_items)
-            items_html = ""
-            for i, row in final_df.iterrows():
-                items_html += f"""
-                <tr class="border-b border-gray-200">
-                    <td class="p-2 align-top">{i + 1}</td>
-                    <td class="p-2 align-top">{row['TYPE']}</td>
-                    <td class="p-2 align-top">{row['QTY']}</td>
-                    <td class="p-2 align-top">{row['Supplier']}</td>
-                    <td class="p-2 w-1/3 align-top">
-                        <strong class="block text-xs font-bold">{row['CAT_NO']}</strong>
-                        <span>{row['Description']}</span>
-                    </td>
-                    <td class="p-2 text-right align-top">{format_currency(row['SELL_UNIT_EX_GST'])}</td>
-                    <td class="p-2 text-right align-top">{format_currency(row['SELL_TOTAL_EX_GST'])}</td>
-                </tr>"""
+            with st.spinner("Generating PDF..."):
+                final_df = _calculate_sell_prices(st.session_state.quote_items)
+                items_html = ""
+                for i, row in final_df.iterrows():
+                    items_html += f"""
+                    <tr class="border-b border-gray-200">
+                        <td class="p-2 align-top">{i + 1}</td>
+                        <td class="p-2 align-top">{row['TYPE']}</td>
+                        <td class="p-2 align-top">{row['QTY']}</td>
+                        <td class="p-2 align-top">{row['Supplier']}</td>
+                        <td class="p-2 w-1/3 align-top">
+                            <strong class="block text-xs font-bold">{row['CAT_NO']}</strong>
+                            <span>{row['Description']}</span>
+                        </td>
+                        <td class="p-2 text-right align-top">{format_currency(row['SELL_UNIT_EX_GST'])}</td>
+                        <td class="p-2 text-right align-top">{format_currency(row['SELL_TOTAL_EX_GST'])}</td>
+                    </tr>"""
 
-            company_logo_html = f'<img src="data:image/png;base64,{st.session_state.company_logo_b64}" alt="Company Logo" class="h-16 mb-4">' if st.session_state.get("company_logo_b64") else ''
-            customer_logo_html = f'<img src="data:image/png;base64,{st.session_state.customer_logo_b64}" alt="Customer Logo" class="max-h-24 object-contain">' if st.session_state.get("customer_logo_b64") else ''
-            branch_address_html = '<p class="text-sm text-gray-600">31-33 Rooks Road, Nunawading, 3131</p>' if st.session_state.user_details['branch'] == "AWM Nunawading" else ''
-            attention_html = f'<p class="text-gray-700"><strong class="font-bold text-gray-800">Attn:</strong> {q_details["attention"] or "N/A"}</p>'
+                company_logo_html = f'<img src="data:image/png;base64,{st.session_state.company_logo_b64}" alt="Company Logo" class="h-16 mb-4">' if st.session_state.get("company_logo_b64") else ''
+                customer_logo_html = f'<img src="data:image/png;base64,{st.session_state.get("customer_logo_b64")}" alt="Customer Logo" class="max-h-24 object-contain">' if st.session_state.get("customer_logo_b64") else ''
+                branch_address_html = '<p class="text-sm text-gray-600">31-33 Rooks Road, Nunawading, 3131</p>' if st.session_state.user_details['branch'] == "AWM Nunawading" else ''
+                attention_html = f'<p class="text-gray-700"><strong class="font-bold text-gray-800">Attn:</strong> {q_details["attention"] or "N/A"}</p>'
 
-            quote_html = f"""
-            <!DOCTYPE html><html lang="en">
-            <head><meta charset="UTF-8"><title>Quote {q_details['quoteNumber']}</title><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet"></head>
-            <body>
-                <div class="bg-white">
-                    <header class="flex justify-between items-start mb-8 border-b border-gray-300 pb-8">
-                        <div>
-                            {company_logo_html}
-                            <h1 class="text-2xl font-bold text-gray-800">{st.session_state.user_details['branch']}</h1>
-                            {branch_address_html}
-                            <p class="text-sm text-gray-600">A Division of Metal Manufactures Limited (A.B.N. 13 003 762 641)</p>
-                        </div>
-                        <div class="text-right">
-                            {customer_logo_html}
-                            <h2 class="text-3xl font-bold text-gray-700 mt-4">QUOTATION</h2>
-                        </div>
-                    </header>
-                    <section class="grid grid-cols-2 gap-6 mb-8">
-                        <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                            <h2 class="font-bold text-gray-800 mb-2">QUOTE TO:</h2>
-                            <p class="text-gray-700">{q_details['customerName']}</p>
-                            {attention_html}
-                        </div>
-                        <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                            <p class="text-gray-700"><strong class="font-bold text-gray-800">PROJECT:</strong> {q_details['projectName']}</p>
-                            <p class="text-gray-700"><strong class="font-bold text-gray-800">QUOTE #:</strong> {q_details['quoteNumber']}</p>
-                            <p class="text-gray-700"><strong class="font-bold text-gray-800">DATE:</strong> {q_details['date']}</p>
-                        </div>
-                    </section>
-                    <main>
-                        <table class="w-full text-left text-sm" style="table-layout: auto;">
-                            <thead class="bg-slate-800 text-white"><tr>
-                                <th class="p-2 rounded-tl-lg">ITEM</th><th class="p-2">TYPE</th><th class="p-2">QTY</th><th class="p-2">BRAND</th>
-                                <th class="p-2 w-1/3">PRODUCT DETAILS</th>
-                                <th class="p-2 text-right">UNIT EX GST</th><th class="p-2 text-right rounded-tr-lg">TOTAL EX GST</th>
-                            </tr></thead>
-                            <tbody class="divide-y divide-gray-200">{items_html}</tbody>
-                        </table>
-                    </main>
-                    
-                    <footer class="mt-8 flex justify-end" style="page-break-inside: avoid;">
-                        <div class="w-2/5">
-                            <div class="flex justify-between p-2 bg-gray-100 border-b border-gray-200">
-                                <span class="font-bold text-gray-800">Sub-Total (Ex GST):</span>
-                                <span class="text-gray-800">{format_currency(sub_total)}</span>
+                quote_html = f"""
+                <!DOCTYPE html><html lang="en">
+                <head><meta charset="UTF-8"><title>Quote {q_details['quoteNumber']}</title>
+                <script src="https://cdn.tailwindcss.com"></script>
+                <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+                <style>body {{ font-family: 'Inter', sans-serif; }}</style>
+                </head>
+                <body class="p-8">
+                    <div class="bg-white">
+                        <header class="flex justify-between items-start mb-8 border-b border-gray-300 pb-8">
+                            <div>
+                                {company_logo_html}
+                                <h1 class="text-2xl font-bold text-gray-800">{st.session_state.user_details['branch']}</h1>
+                                {branch_address_html}
+                                <p class="text-sm text-gray-600">A Division of Metal Manufactures Limited (A.B.N. 13 003 762 641)</p>
                             </div>
-                            <div class="flex justify-between p-2 bg-gray-100 border-b border-gray-200">
-                                <span class="font-bold text-gray-800">GST (10%):</span>
-                                <span class="text-gray-800">{format_currency(gst_total)}</span>
+                            <div class="text-right">
+                                {customer_logo_html}
+                                <h2 class="text-3xl font-bold text-gray-700 mt-4">QUOTATION</h2>
                             </div>
-                            <div class="flex justify-between p-3 bg-gray-200 rounded-b-lg">
-                                <span class="font-bold text-gray-900 text-lg">Grand Total (Inc GST):</span>
-                                <span class="font-bold text-gray-900 text-lg">{format_currency(grand_total)}</span>
+                        </header>
+                        <section class="grid grid-cols-2 gap-6 mb-8">
+                            <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                                <h2 class="font-bold text-gray-800 mb-2">QUOTE TO:</h2>
+                                <p class="text-gray-700">{q_details['customerName']}</p>
+                                {attention_html}
                             </div>
-                        </div>
-                    </footer>
+                            <div class="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                                <p class="text-gray-700"><strong class="font-bold text-gray-800">PROJECT:</strong> {q_details['projectName']}</p>
+                                <p class="text-gray-700"><strong class="font-bold text-gray-800">QUOTE #:</strong> {q_details['quoteNumber']}</p>
+                                <p class="text-gray-700"><strong class="font-bold text-gray-800">DATE:</strong> {q_details['date']}</p>
+                            </div>
+                        </section>
+                        <main>
+                            <table class="w-full text-left text-sm" style="table-layout: auto;">
+                                <thead class="bg-slate-800 text-white"><tr>
+                                    <th class="p-2 rounded-tl-lg">ITEM</th><th class="p-2">TYPE</th><th class="p-2">QTY</th><th class="p-2">BRAND</th>
+                                    <th class="p-2 w-1/3">PRODUCT DETAILS</th>
+                                    <th class="p-2 text-right">UNIT EX GST</th><th class="p-2 text-right rounded-tr-lg">TOTAL EX GST</th>
+                                </tr></thead>
+                                <tbody class="divide-y divide-gray-200">{items_html}</tbody>
+                            </table>
+                        </main>
+                        
+                        <footer class="mt-8 flex justify-end" style="page-break-inside: avoid;">
+                            <div class="w-2/5">
+                                <div class="flex justify-between p-2 bg-gray-100 border-b border-gray-200">
+                                    <span class="font-bold text-gray-800">Sub-Total (Ex GST):</span>
+                                    <span class="text-gray-800">{format_currency(sub_total)}</span>
+                                </div>
+                                <div class="flex justify-between p-2 bg-gray-100 border-b border-gray-200">
+                                    <span class="font-bold text-gray-800">GST (10%):</span>
+                                    <span class="text-gray-800">{format_currency(gst_total)}</span>
+                                </div>
+                                <div class="flex justify-between p-3 bg-gray-200 rounded-b-lg">
+                                    <span class="font-bold text-gray-900 text-lg">Grand Total (Inc GST):</span>
+                                    <span class="font-bold text-gray-900 text-lg">{format_currency(grand_total)}</span>
+                                </div>
+                            </div>
+                        </footer>
 
-                    <div class="mt-12 pt-8" style="page-break-inside: avoid;">
-                        <h3 class="font-bold text-gray-800">Prepared For You By:</h3>
-                        <p class="text-gray-700 mt-2">{st.session_state.user_details['name']}</p>
-                        <p class="text-gray-600 text-sm">{st.session_state.user_details['job_title']}</p>
-                        <p class="text-gray-600 text-sm">{st.session_state.user_details['branch']}</p>
-                        <p class="mt-2 text-sm"><strong>Email:</strong> {st.session_state.user_details['email']}</p>
-                        <p class="text-sm"><strong>Phone:</strong> {st.session_state.user_details['phone']}</p>
+                        <div class="mt-12 pt-8" style="page-break-inside: avoid;">
+                            <h3 class="font-bold text-gray-800">Prepared For You By:</h3>
+                            <p class="text-gray-700 mt-2">{st.session_state.user_details['name']}</p>
+                            <p class="text-gray-600 text-sm">{st.session_state.user_details['job_title']}</p>
+                            <p class="text-gray-600 text-sm">{st.session_state.user_details['branch']}</p>
+                            <p class="mt-2 text-sm"><strong>Email:</strong> {st.session_state.user_details['email']}</p>
+                            <p class="text-sm"><strong>Phone:</strong> {st.session_state.user_details['phone']}</p>
+                        </div>
+                        <div class="mt-12 text-xs text-gray-500 border-t border-gray-300 pt-4" style="page-break-inside: avoid;">
+                            <h3 class="font-bold mb-2">CONDITIONS:</h3>
+                            <p>This offer is valid for 30 days. All goods are sold under MMEM's Terms and Conditions of Sale. Any changes in applicable taxes (GST) or tariffs which may occur will be to your account.</p>
+                        </div>
                     </div>
-                    <div class="mt-12 text-xs text-gray-500 border-t border-gray-300 pt-4" style="page-break-inside: avoid;">
-                        <h3 class="font-bold mb-2">CONDITIONS:</h3>
-                        <p>This offer is valid for 30 days. All goods are sold under MMEM's Terms and Conditions of Sale. Any changes in applicable taxes (GST) or tariffs which may occur will be to your account.</p>
-                    </div>
-                </div>
-            </body></html>
-            """
+                </body></html>
+                """
 
-            pdf_css = """
-            @page { size: A4; margin: 1.5cm; }
-            body { font-family: 'Inter', sans-serif; }
-            thead { display: table-header-group; }
-            tfoot { display: table-footer-group; }
-            table { width: 100%; border-collapse: collapse; }
-            tr { page-break-inside: avoid !important; }
-            th, td { text-align: left; padding: 4px 6px; vertical-align: top; }
-            th { background-color: #1e293b; color: white; }
-            td.text-right, th.text-right { text-align: right; }
-            """
-            combined_css = [
-                CSS(string='@import url("https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css");'),
-                CSS(string=pdf_css)
-            ]
+                pdf_css = """
+                @page { size: A4; margin: 1.5cm; }
+                body { font-family: 'Inter', sans-serif; }
+                thead { display: table-header-group; }
+                tfoot { display: table-footer-group; }
+                table { width: 100%; border-collapse: collapse; }
+                tr { page-break-inside: avoid !important; }
+                th, td { text-align: left; padding: 4px 6px; vertical-align: top; }
+                th { background-color: #1e293b; color: white; }
+                td.text-right, th.text-right { text-align: right; }
+                """
+                
+                pdf_bytes = HTML(string=quote_html, base_url=".").write_pdf(stylesheets=[CSS(string=pdf_css)])
 
-            pdf_bytes = HTML(string=quote_html).write_pdf(stylesheets=combined_css)
-
-            st.download_button(
-                label="✅ Download Final Quote as PDF",
-                data=pdf_bytes,
-                file_name=f"Quote_{q_details['quoteNumber']}_{q_details['customerName']}.pdf",
-                mime='application/pdf',
-                use_container_width=True
-            )
+                st.download_button(
+                    label="✅ Download Final Quote as PDF",
+                    data=pdf_bytes,
+                    file_name=f"Quote_{q_details['quoteNumber']}_{q_details['customerName']}.pdf",
+                    mime='application/pdf',
+                    use_container_width=True
+                )
         
         st.markdown('</div>', unsafe_allow_html=True)
