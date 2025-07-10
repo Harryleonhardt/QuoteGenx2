@@ -128,6 +128,23 @@ def summarize_description():
     except Exception as e:
         st.error(f"Failed to summarize: {e}")
 
+# --- AMENDED: Callback for st.data_editor ---
+def update_quote_items_from_editor():
+    """Callback function to update session state from the data editor."""
+    # The data editor's state is accessed via its key in st.session_state
+    edited_data = st.session_state["data_editor"]
+    df = pd.DataFrame(edited_data)
+    
+    # Define the columns that should be persisted in the state
+    original_cols = ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT", "DISC", "MARGIN"]
+    
+    # Filter to only include columns that exist in the edited dataframe
+    cols_to_keep = [col for col in original_cols if col in df.columns]
+    
+    # Update the session state, ensuring index is reset
+    st.session_state.quote_items = df[cols_to_keep].reset_index(drop=True)
+
+
 # --- Gemini API & Password ---
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
@@ -225,7 +242,7 @@ with st.container(border=False):
 
             if failed_files:
                 st.warning(f"Could not process the following files: {', '.join(failed_files)}")
-
+        
         st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
@@ -241,7 +258,8 @@ if not st.session_state.quote_items.empty:
         st.header("Step 2: Edit & Refine Quote")
         st.caption("Edit values directly in the table. Calculations update automatically.")
         
-        edited_df = st.data_editor(
+        # --- AMENDED: Using the on_change callback for stability ---
+        st.data_editor(
             _calculate_sell_prices(st.session_state.quote_items),
             column_config={
                 "COST_PER_UNIT": st.column_config.NumberColumn("Cost/Unit", format="$%.2f"),
@@ -252,9 +270,11 @@ if not st.session_state.quote_items.empty:
                 "SELL_TOTAL_EX_GST": st.column_config.NumberColumn("Line Price Ex GST", disabled=True, format="$%.2f", help="= Unit Price Ex GST * QTY"),
             },
             column_order=["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT", "DISC", "MARGIN", "SELL_UNIT_EX_GST", "SELL_TOTAL_EX_GST"],
-            num_rows="dynamic", use_container_width=True, key="data_editor"
+            num_rows="dynamic",
+            use_container_width=True,
+            key="data_editor",
+            on_change=update_quote_items_from_editor
         )
-        st.session_state.quote_items = edited_df.drop(columns=['SELL_UNIT_EX_GST', 'SELL_TOTAL_EX_GST']).reset_index(drop=True)
         
         st.divider()
         st.subheader("Table Controls")
@@ -270,7 +290,9 @@ if not st.session_state.quote_items.empty:
 
         st.divider()
         st.subheader("Row Operations")
-        row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in st.session_state.quote_items.iterrows()]
+        
+        # --- AMENDED: Handles non-string data in 'Description' column ---
+        row_options = [f"Row {i+1}: {(str(row['Description'] or ''))[:50]}..." for i, row in st.session_state.quote_items.iterrows()]
         selected_row_str = st.selectbox("Select a row to modify:", options=row_options, index=None, placeholder="Choose a row...")
         
         if selected_row_str:
@@ -283,7 +305,9 @@ if not st.session_state.quote_items.empty:
 
         st.divider()
         st.subheader("✍️ AI Description Summarizer")
-        summary_row_options = [f"Row {i+1}: {row['Description'][:50]}..." for i, row in st.session_state.quote_items.iterrows()]
+        
+        # --- AMENDED: Handles non-string data in 'Description' column ---
+        summary_row_options = [f"Row {i+1}: {(str(row['Description'] or ''))[:50]}..." for i, row in st.session_state.quote_items.iterrows()]
         selected_item_str_for_summary = st.selectbox("Select Item to Summarize", options=summary_row_options, index=None, placeholder="Choose an item...", key="summary_selectbox")
 
         if selected_item_str_for_summary:
