@@ -169,7 +169,7 @@ if st.session_state.processing_triggered:
                 "From the provided document, extract all line items. For each item, extract: "
                 "TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. "
                 "Return ONLY a valid JSON array of objects. Ensure QTY and COST_PER_UNIT are numbers. "
-                "**Crucially, all string values must be properly formatted. Any special characters like newlines or double quotes within a string must be correctly escaped (e.g., '\\n' for newlines, '\\\"' for quotes).**"
+                "**Crucially, all string values in the JSON must be properly formatted. Any special characters like newlines or double quotes within a string must be correctly escaped (e.g., '\\n' for newlines, '\\\"' for quotes).**"
             )
             json_schema = {
                 "type": "ARRAY", "items": {
@@ -203,7 +203,6 @@ if st.session_state.processing_triggered:
             if failed_files:
                 st.warning(f"Could not process the following files: {', '.join(failed_files)}")
 
-# ✅ FIX: This section was previously missing and is now restored.
 # --- STEP 1: START OR LOAD A QUOTE ---
 with st.container(border=True):
     st.header("Step 1: Start or Load a Quote")
@@ -268,7 +267,8 @@ if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
         )
         st.divider()
         st.subheader("Row Operations")
-        row_options = [f"Row {i+1}: {row.get('Description', 'No Description')[:50]}..." for i, row in st.session_state.quote_items.iterrows()]
+        # ✅ FIX: Added str() to prevent error on None values
+        row_options = [f"Row {i+1}: {str(row.get('Description', 'No Description'))[:50]}..." for i, row in st.session_state.quote_items.iterrows()]
         selected_row_str = st.selectbox("Select a row to modify:", options=row_options, index=None, placeholder="Choose a row...")
         if selected_row_str:
             st.session_state.selected_row_index = row_options.index(selected_row_str)
@@ -278,7 +278,8 @@ if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
         c3.button("Delete Selected Row", use_container_width=True, on_click=delete_row, disabled=not selected_row_str)
         st.divider()
         st.subheader("✍️ AI Description Summarizer")
-        summary_row_options = [f"Row {i+1}: {row.get('Description', 'No Description')[:50]}..." for i, row in st.session_state.quote_items.iterrows()]
+        # ✅ FIX: Added str() to prevent error on None values
+        summary_row_options = [f"Row {i+1}: {str(row.get('Description', 'No Description'))[:50]}..." for i, row in st.session_state.quote_items.iterrows()]
         selected_item_str_for_summary = st.selectbox("Select Item to Summarize", options=summary_row_options, index=None, placeholder="Choose an item...", key="summary_selectbox")
         if selected_item_str_for_summary:
             st.session_state.summary_selectbox_index = summary_row_options.index(selected_item_str_for_summary)
