@@ -139,8 +139,6 @@ if "quote_details" not in st.session_state:
     st.session_state.quote_details = {"customerName": "", "attention": "", "projectName": "", "address": "", "quoteNumber": f"Q{pd.Timestamp.now().strftime('%Y%m%d%H%M')}", "date": pd.Timestamp.now().strftime('%d/%m/%Y')}
 if "sort_by" not in st.session_state:
     st.session_state.sort_by = "Type"
-if "processing_triggered" not in st.session_state:
-    st.session_state.processing_triggered = False
 if "company_logo_img" not in st.session_state:
     try:
         logo_path = Path(__file__).parent / "AWM Logo (002).png"
@@ -157,68 +155,70 @@ col2.title("AWM Quote Generator")
 st.caption("App created by Harry Leonhardt")
 st.divider()
 
-# --- Main Processing Block ---
-if st.session_state.processing_triggered:
-    st.session_state.processing_triggered = False
-    uploaded_files = st.session_state.get('file_uploader_state', [])
-    if uploaded_files:
-        with st.spinner(f"Processing {len(uploaded_files)} file(s)..."):
-            all_new_items = []
-            failed_files = []
-            extraction_prompt = (
-                "From the provided document, extract all line items. For each item, extract: "
-                "TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. "
-                "Return ONLY a valid JSON array of objects. Ensure QTY and COST_PER_UNIT are numbers. "
-                "**Crucially, all string values in the JSON must be properly formatted. Any special characters like newlines or double quotes within a string must be correctly escaped (e.g., '\\n' for newlines, '\\\"' for quotes).**"
-            )
-            json_schema = {
-                "type": "ARRAY", "items": {
-                    "type": "OBJECT", "properties": {
-                        "TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"},
-                        "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}
-                    }, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]
-                }
-            }
-            model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
-            for i, file in enumerate(uploaded_files):
-                try:
-                    st.write(f"Processing `{file.name}`...")
-                    part = file_to_generative_part(file)
-                    response = model.generate_content([extraction_prompt, part])
-                    extracted_data = json.loads(response.text)
-                    if extracted_data:
-                        all_new_items.extend(extracted_data)
-                    if i < len(uploaded_files) - 1:
-                        time.sleep(2)
-                except Exception as e:
-                    st.error(f"An error occurred processing `{file.name}`: {e}")
-                    failed_files.append(file.name)
-            if all_new_items:
-                new_df = pd.DataFrame(all_new_items)
-                new_df['DISC'] = 0.0
-                new_df['MARGIN'] = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
-                st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
-                apply_sorting()
-                st.success(f"Successfully extracted {len(all_new_items)} items!")
-            if failed_files:
-                st.warning(f"Could not process the following files: {', '.join(failed_files)}")
-
 # --- STEP 1: START OR LOAD A QUOTE ---
 with st.container(border=True):
     st.header("Step 1: Start or Load a Quote")
+    
     tab1, tab2 = st.tabs(["➕ Start New Quote", "📂 Load Saved Quote"])
+
+    # ✅ This tab now contains the restored batch-processing logic
     with tab1:
         st.markdown("Upload one or more supplier quote documents (PDF or TXT).")
         st.file_uploader(
             "Upload supplier documents", type=['pdf', 'txt'], accept_multiple_files=True,
             key='file_uploader_state'
         )
-        st.button(
-            "Process Uploaded Files", 
-            use_container_width=True, 
-            disabled=not st.session_state.get('file_uploader_state'),
-            on_click=lambda: st.session_state.update(processing_triggered=True)
-        )
+        
+        if st.button("Process All Uploaded Files", use_container_width=True, disabled=not st.session_state.get('file_uploader_state')):
+            uploaded_files = st.session_state.get('file_uploader_state', [])
+            
+            with st.spinner(f"Processing {len(uploaded_files)} file(s)..."):
+                all_new_items = []
+                failed_files = []
+                
+                extraction_prompt = (
+                    "From the provided document, extract all line items. For each item, extract: "
+                    "TYPE, QTY, Supplier, CAT_NO, Description, and COST_PER_UNIT. "
+                    "Return ONLY a valid JSON array of objects. Ensure QTY and COST_PER_UNIT are numbers. "
+                    "**Crucially, all string values must be properly formatted...**"
+                )
+                json_schema = {
+                    "type": "ARRAY", "items": {
+                        "type": "OBJECT", "properties": {
+                            "TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"},
+                            "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}
+                        }, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]
+                    }
+                }
+                model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
+
+                for i, file in enumerate(uploaded_files):
+                    try:
+                        st.write(f"Processing `{file.name}`...")
+                        part = file_to_generative_part(file)
+                        response = model.generate_content([extraction_prompt, part])
+                        extracted_data = json.loads(response.text)
+                        if extracted_data:
+                            all_new_items.extend(extracted_data)
+                        if i < len(uploaded_files) - 1:
+                            time.sleep(2)
+                    except Exception as e:
+                        st.error(f"An error occurred processing `{file.name}`: {e}")
+                        failed_files.append(file.name)
+
+                if all_new_items:
+                    new_df = pd.DataFrame(all_new_items)
+                    new_df['DISC'] = 0.0
+                    new_df['MARGIN'] = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
+                    st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
+                    apply_sorting()
+                    st.success(f"Successfully extracted {len(all_new_items)} items!")
+
+                if failed_files:
+                    st.warning(f"Could not process the following files: {', '.join(failed_files)}")
+            
+            st.rerun()
+
     with tab2:
         st.markdown("Load a previously saved quote from a CSV file.")
         if saved_quote_file := st.file_uploader("Load Quote from CSV", type="csv"):
@@ -267,7 +267,6 @@ if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
         )
         st.divider()
         st.subheader("Row Operations")
-        # ✅ FIX: Added str() to prevent error on None values
         row_options = [f"Row {i+1}: {str(row.get('Description', 'No Description'))[:50]}..." for i, row in st.session_state.quote_items.iterrows()]
         selected_row_str = st.selectbox("Select a row to modify:", options=row_options, index=None, placeholder="Choose a row...")
         if selected_row_str:
@@ -278,7 +277,6 @@ if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
         c3.button("Delete Selected Row", use_container_width=True, on_click=delete_row, disabled=not selected_row_str)
         st.divider()
         st.subheader("✍️ AI Description Summarizer")
-        # ✅ FIX: Added str() to prevent error on None values
         summary_row_options = [f"Row {i+1}: {str(row.get('Description', 'No Description'))[:50]}..." for i, row in st.session_state.quote_items.iterrows()]
         selected_item_str_for_summary = st.selectbox("Select Item to Summarize", options=summary_row_options, index=None, placeholder="Choose an item...", key="summary_selectbox")
         if selected_item_str_for_summary:
