@@ -5,3 +5,4 @@ Pillow
 weasyprint
 google-cloud-firestore
 google-auth-oauthlib
+PyMuPDF
