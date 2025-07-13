@@ -10,7 +10,6 @@ from pathlib import Path
 from PIL import Image
 
 try:
-    # PyMuPDF (fitz) is no longer needed for direct Gemini processing
     from weasyprint import HTML, CSS
     WEASYPRINT_AVAILABLE = True
 except ImportError:
@@ -51,9 +50,7 @@ st.markdown("""
 # --- Helper & Callback Functions ---
 def file_to_generative_part(file):
     """Converts an uploaded file into the format Gemini API expects."""
-    # Reset the read pointer to the beginning of the file
     file.seek(0)
-    # Return the file's bytes and MIME type
     return {"mime_type": file.type, "data": file.getvalue()}
 
 def format_currency(num):
@@ -148,14 +145,21 @@ st.divider()
 # --- STEP 1: START OR LOAD A QUOTE ---
 with st.container(border=True):
     st.header("Step 1: Start or Load a Quote")
-    
+
     tab1, tab2 = st.tabs(["➕ Start New Quote", "📂 Load Saved Quote"])
 
     with tab1:
-        st.markdown("Upload one or more supplier quote documents (PDF). **Note:** Direct processing is more accurate but may crash with large files.")
+        st.markdown("Upload one or more supplier quote documents (PDF).")
         st.file_uploader(
             "Upload supplier documents", type=['pdf'], accept_multiple_files=True,
             key='file_uploader_state'
+        )
+        
+        st.text_area(
+            "Special Instructions for AI (Optional)",
+            key="custom_prompt_instructions",
+            placeholder="e.g., Ignore headers and footers. For 'Supplier X', the part number is always 7 digits.",
+            help="Provide specific instructions to improve extraction accuracy for complex or unusual PDF layouts."
         )
 
         st.divider()
@@ -164,24 +168,46 @@ with st.container(border=True):
         if st.button("Process All Uploaded Files", use_container_width=True, disabled=not uploaded_files):
             with st.spinner(f"Processing {len(uploaded_files)} file(s) with Gemini Vision..."):
                 all_new_items, failed_files = [], []
-                # Updated prompt for document analysis
-                extraction_prompt = "From the provided document, extract all line items..."
+                
+                # --- NEW, MORE DETAILED BASE PROMPT ---
+                base_prompt = """
+                Your task is to accurately extract all line items from the provided supplier quote document. Analyze the entire document to understand its structure first. Return ONLY a valid JSON array of objects.
+
+                Follow these specific rules for each field:
+
+                1.  **Supplier**: Identify the supplier's company name by looking for a logo or a title, often near an ABN. Apply this single supplier name to all extracted line items.
+
+                2.  **TYPE**: This is a short code, typically in the first or second column (e.g., 'A', 'B', 'C1', 'EM2'). Every line item must have a TYPE.
+
+                3.  **CAT_NO (Catalog Number)**: This is a unique product identifier (e.g., 'argo1200em', 'OSQWC6L30K4M'), not a sentence. It may be under a column named "Part Number" or "Item Code".
+
+                4.  **Description**: This is the descriptive text for the product, usually a full sentence or paragraph detailing specifications. It should consist of multiple words.
+
+                5.  **QTY (Quantity)**: This is the numerical quantity of units for the item.
+
+                6.  **COST_PER_UNIT**: This is the price for a single unit.
+
+                Ensure all string values in the resulting JSON are properly formatted and escaped.
+                """
+                
+                custom_instructions = st.session_state.get("custom_prompt_instructions", "")
+                full_extraction_prompt = f"{base_prompt}\n\nAdditional Instructions:\n{custom_instructions}" if custom_instructions else base_prompt
+                # --- END PROMPT LOGIC ---
+
                 json_schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"},"CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}}, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]}}
                 model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
                 
                 for file in uploaded_files:
                     try:
                         st.write(f"Processing `{file.name}`...")
-                        # Use the helper function to prepare the file for Gemini
                         part = file_to_generative_part(file)
-                        # Send the file part directly to the model
-                        response = model.generate_content([extraction_prompt, part])
+                        response = model.generate_content([full_extraction_prompt, part])
                         
                         extracted_data = json.loads(response.text)
                         if extracted_data:
                             all_new_items.extend(extracted_data)
                         
-                        time.sleep(1) # Small pause between API calls
+                        time.sleep(1)
                     except Exception as e:
                         st.error(f"An error occurred processing `{file.name}`: {e}")
                         failed_files.append(file.name)
