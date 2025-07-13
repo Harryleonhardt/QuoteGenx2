@@ -10,7 +10,7 @@ from pathlib import Path
 from PIL import Image
 
 try:
-    import fitz  # PyMuPDF
+    # PyMuPDF (fitz) is no longer needed for direct Gemini processing
     from weasyprint import HTML, CSS
     WEASYPRINT_AVAILABLE = True
 except ImportError:
@@ -49,6 +49,13 @@ st.markdown("""
 
 
 # --- Helper & Callback Functions ---
+def file_to_generative_part(file):
+    """Converts an uploaded file into the format Gemini API expects."""
+    # Reset the read pointer to the beginning of the file
+    file.seek(0)
+    # Return the file's bytes and MIME type
+    return {"mime_type": file.type, "data": file.getvalue()}
+
 def format_currency(num):
     if pd.isna(num) or num is None: return "$0.00"
     return f"${num:,.2f}"
@@ -145,86 +152,52 @@ with st.container(border=True):
     tab1, tab2 = st.tabs(["➕ Start New Quote", "📂 Load Saved Quote"])
 
     with tab1:
-        st.markdown("Upload one or more supplier quote documents (PDF).")
+        st.markdown("Upload one or more supplier quote documents (PDF). **Note:** Direct processing is more accurate but may crash with large files.")
         st.file_uploader(
             "Upload supplier documents", type=['pdf'], accept_multiple_files=True,
             key='file_uploader_state'
         )
-        processing_mode = st.radio(
-            "Processing Mode",
-            ["Process All at Once (Fast)", "Process One by One (Stable)"],
-            key="processing_mode", horizontal=True,
-            help="Choose 'Stable' if the app crashes when processing large or numerous files."
-        )
+
         st.divider()
         uploaded_files = st.session_state.get('file_uploader_state', [])
-        if processing_mode == "Process All at Once (Fast)":
-            if st.button("Process All Uploaded Files", use_container_width=True, disabled=not uploaded_files):
-                with st.spinner(f"Processing {len(uploaded_files)} file(s)..."):
-                    all_new_items, failed_files = [], []
-                    extraction_prompt = "From the provided text, extract all line items..."
-                    json_schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"},"CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}}, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]}}
-                    model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
-                    for i, file in enumerate(uploaded_files):
-                        try:
-                            st.write(f"Processing `{file.name}`...")
-                            doc = fitz.open(stream=file.read(), filetype="pdf")
-                            full_text = "".join([page.get_text() for page in doc])
-                            if full_text.strip():
-                                response = model.generate_content([extraction_prompt, full_text])
-                                extracted_data = json.loads(response.text)
-                                if extracted_data:
-                                    all_new_items.extend(extracted_data)
-                            if i < len(uploaded_files) - 1:
-                                time.sleep(2)
-                        except Exception as e:
-                            st.error(f"An error occurred processing `{file.name}`: {e}")
-                            failed_files.append(file.name)
-                    if all_new_items:
-                        new_df = pd.DataFrame(all_new_items)
-                        new_df['DISC'] = 0.0
-                        new_df['MARGIN'] = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
-                        st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
-                        apply_sorting()
-                        st.success(f"Successfully extracted {len(all_new_items)} items!")
-                    if failed_files:
-                        st.warning(f"Could not process the following files: {', '.join(failed_files)}")
-                st.rerun()
-        else:
-            if uploaded_files:
-                st.write(f"**{len(uploaded_files)} file(s) ready to process:**")
-                for f in uploaded_files:
-                    st.caption(f.name)
-                st.divider()
-                if st.button("Process Next File", use_container_width=True):
-                    file_to_process = st.session_state.file_uploader_state.pop(0)
-                    with st.spinner(f"Processing `{file_to_process.name}` page by page..."):
-                        try:
-                            all_items_from_file = []
-                            doc = fitz.open(stream=file_to_process.read(), filetype="pdf")
-                            for page_num, page in enumerate(doc):
-                                st.write(f"...analyzing page {page_num + 1} of {len(doc)}")
-                                page_text = page.get_text()
-                                if page_text.strip():
-                                    extraction_prompt = "From the text (from a single page), extract line items..."
-                                    json_schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"}, "CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}},"required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]}}
-                                    model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
-                                    response = model.generate_content([extraction_prompt, page_text])
-                                    extracted_data = json.loads(response.text)
-                                    if extracted_data:
-                                        all_items_from_file.extend(extracted_data)
-                            if all_items_from_file:
-                                new_df = pd.DataFrame(all_items_from_file)
-                                new_df['DISC'] = 0.0
-                                new_df['MARGIN'] = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
-                                st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
-                                apply_sorting()
-                                st.success(f"Successfully processed {len(all_items_from_file)} items from `{file_to_process.name}`!")
-                            else:
-                                st.warning(f"No items found in `{file_to_process.name}`.")
-                        except Exception as e:
-                            st.error(f"An error occurred processing `{file_to_process.name}`: {e}")
-                    st.rerun()
+
+        if st.button("Process All Uploaded Files", use_container_width=True, disabled=not uploaded_files):
+            with st.spinner(f"Processing {len(uploaded_files)} file(s) with Gemini Vision..."):
+                all_new_items, failed_files = [], []
+                # Updated prompt for document analysis
+                extraction_prompt = "From the provided document, extract all line items..."
+                json_schema = {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {"TYPE": {"type": "STRING"}, "QTY": {"type": "NUMBER"}, "Supplier": {"type": "STRING"},"CAT_NO": {"type": "STRING"}, "Description": {"type": "STRING"}, "COST_PER_UNIT": {"type": "NUMBER"}}, "required": ["TYPE", "QTY", "Supplier", "CAT_NO", "Description", "COST_PER_UNIT"]}}
+                model = genai.GenerativeModel('gemini-1.5-flash', generation_config={"response_mime_type": "application/json", "response_schema": json_schema})
+                
+                for file in uploaded_files:
+                    try:
+                        st.write(f"Processing `{file.name}`...")
+                        # Use the helper function to prepare the file for Gemini
+                        part = file_to_generative_part(file)
+                        # Send the file part directly to the model
+                        response = model.generate_content([extraction_prompt, part])
+                        
+                        extracted_data = json.loads(response.text)
+                        if extracted_data:
+                            all_new_items.extend(extracted_data)
+                        
+                        time.sleep(1) # Small pause between API calls
+                    except Exception as e:
+                        st.error(f"An error occurred processing `{file.name}`: {e}")
+                        failed_files.append(file.name)
+                
+                if all_new_items:
+                    new_df = pd.DataFrame(all_new_items)
+                    new_df['DISC'] = 0.0
+                    new_df['MARGIN'] = st.session_state.get("global_margin_input", DEFAULT_MARGIN)
+                    st.session_state.quote_items = pd.concat([st.session_state.quote_items, new_df], ignore_index=True)
+                    apply_sorting()
+                    st.success(f"Successfully extracted {len(all_new_items)} items!")
+                
+                if failed_files:
+                    st.warning(f"Could not process the following files: {', '.join(failed_files)}")
+            
+            st.rerun()
 
     with tab2:
         st.markdown("Load a previously saved quote from a CSV file.")
@@ -232,8 +205,10 @@ with st.container(border=True):
             try:
                 st.session_state.quote_items = pd.read_csv(saved_quote_file)
                 st.success("Quote successfully loaded!")
+                st.rerun()
             except Exception as e:
                 st.error(f"Error loading CSV: {e}")
+
 
 # The rest of the app only shows if a quote exists
 if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
@@ -289,7 +264,7 @@ if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
             if staff_profile_zip:
                 try:
                     with zipfile.ZipFile(staff_profile_zip, 'r') as zip_ref:
-                        json_file_name = next((f for f in zip_ref.namelist() if f.lower().endswith('.json')), None)
+                        json_file_name = next((f for f in zip_ref.namelist() if f and f.lower().endswith('.json')), None)
                         if json_file_name:
                             with zip_ref.open(json_file_name) as json_file:
                                 details = json.load(json_file)
@@ -313,14 +288,14 @@ if "quote_items" in st.session_state and not st.session_state.quote_items.empty:
         if customer_profile_zip:
             try:
                 with zipfile.ZipFile(customer_profile_zip, 'r') as zip_ref:
-                    json_file_name = next((f for f in zip_ref.namelist() if f.lower().endswith('.json')), None)
+                    json_file_name = next((f for f in zip_ref.namelist() if f and f.lower().endswith('.json')), None)
                     if json_file_name:
                         with zip_ref.open(json_file_name) as json_file:
                             details = json.load(json_file)
                             st.session_state.quote_details['customerName'] = details.get('customerName', '')
                             st.session_state.quote_details['attention'] = details.get('attention', '')
                             st.session_state.quote_details['address'] = details.get('address', '')
-                    logo_file_name = next((f for f in zip_ref.namelist() if f.lower().endswith(('.png', '.jpg', '.jpeg'))), None)
+                    logo_file_name = next((f for f in zip_ref.namelist() if f and f.lower().endswith(('.png', '.jpg', '.jpeg'))), None)
                     if logo_file_name:
                         with zip_ref.open(logo_file_name) as logo_file:
                             st.session_state.customer_logo_b64 = base64.b64encode(logo_file.read()).decode()
